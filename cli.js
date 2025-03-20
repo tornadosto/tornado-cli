@@ -1201,7 +1201,7 @@ async function fetchEvents({ type, currency, amount, filterEvents }) {
     }
     await fetchGraphEvents();
   }
-  if (!privateRpc && !subgraph && !isTestRPC) {
+  if (!privateRpc && subgraph && !isTestRPC) {
     await syncGraphEvents();
   } else {
     await syncEvents();
