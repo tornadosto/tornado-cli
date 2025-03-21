@@ -6,6 +6,7 @@ const axios = require('axios');
 const assert = require('assert');
 const snarkjs = require('@tornado/snarkjs');
 const crypto = require('crypto');
+const namehash = require('eth-ens-namehash');
 const circomlib = require('@tornado/circomlib');
 const bigInt = snarkjs.bigInt;
 const merkleTree = require('@tornado/fixed-merkle-tree');
@@ -133,7 +134,7 @@ function computeDepositEventsTree(depositEvents) {
  * Check validity of events merkle tree root via tornado contract
  * @async
  * @param {Array} depositEvents
- * @returns {boolean} True, if root is valid, else false
+ * @returns {Promise<boolean>} True, if root is valid, else false
  * @throws {Error}
  */
 async function isRootValid(depositEvents) {
@@ -901,6 +902,109 @@ function initJson(file) {
 }
 
 /**
+ * @todo Upgrade function to check multiple default RPC and select the working one
+ * Select one of default RPCs that works correctly
+ * @param {number | string} chainId 
+ * @returns {Promise<string>} Full RPC link
+ */
+async function selectDefaultRpc(chainId){
+  return config.deployments[`netId${chainId}`].defaultRpc;
+}
+
+/**
+ * Get available relayers data for selected chain
+ * @param {string | number} chainId 
+ * @returns {Array<Object>} List of available relayers
+ */
+async function getRelayers(chainId){
+  let localWeb3 = web3;
+  if (netId != 1) {
+    mainnetRpc = await selectDefaultRpc(1);
+    localWeb3 = await createWeb3Instance(mainnetRpc, torPort)
+  }
+
+  const MIN_STAKE_LISTED_BALANCE = '0X1B1AE4D6E2EF500000'; // 500 TORN
+  const aggregatorContract = '0xE8F47A78A6D52D317D0D2FFFac56739fE14D1b49';
+  const AggregatorABI = require('./abis/Aggregator.abi');
+  const aggregator = new localWeb3.eth.Contract(AggregatorABI, aggregatorContract);
+  const ensSubdomainKey = config.deployments[`netId${chainId}`].ensSubdomainKey;
+  const relayerGraphApi = config.deployments["netId1"].relayerSubgraph;
+  const relayerSubdomains = Object.values(config.deployments).map(({ ensSubdomainKey }) => ensSubdomainKey)
+
+  async function fetchGraphRelayers() {
+    try{
+      const res = await axios.post(relayerGraphApi, { 'query': '{ relayers(first: 1000) {\n    id\n    address\n    ensName\n    ensHash\n  }\n}' });
+      return res.data.data.relayers;
+    } catch(e){
+      console.error("Relayers subgraph API not responding");
+    }
+  }
+  
+  function filterRelayers(acc, curr, ensSubdomainKey, relayer) {
+    const subdomainIndex = relayerSubdomains.indexOf(ensSubdomainKey);
+    const mainnetSubdomain = curr.records[0];
+    const hostname = curr.records[subdomainIndex];
+    const isHostWithProtocol = hostname.includes('http');
+  
+    const isOwner = relayer.address.toLowerCase() === curr.owner.toLowerCase();
+    const hasMinBalance = new BigNumber(curr.balance).gte(MIN_STAKE_LISTED_BALANCE);
+  
+    if (
+      hostname &&
+      isOwner &&
+      mainnetSubdomain &&
+      curr.isRegistered &&
+      hasMinBalance &&
+      !isHostWithProtocol
+    ) {
+      acc.push({
+        hostname,
+        ensName: relayer.ensName,
+        stakeBalance: curr.balance,
+        relayerAddress: relayer.address.toLowerCase()
+      });
+    }
+    return acc;
+  }
+  
+  async function getValidRelayers(relayers, ensSubdomainKey) {
+    const relayerNameHashes = relayers.map((r) => namehash.hash(r.ensName));
+    const relayersData = await aggregator.methods.relayersData(relayerNameHashes, relayerSubdomains).call();
+    const validRelayers = relayersData.reduce(
+      (acc, curr, index) => filterRelayers(acc, curr, ensSubdomainKey, relayers[index]),
+      []
+    );
+    return validRelayers;
+  }
+
+  async function getAvailableRelayersData(relayers){
+    let statuses = [];
+    for (const relayer of relayers) {
+      try {
+        const res = await axios.get(`https://${relayer.hostname}/status`, {timeout: 5000});
+        const statusData = res.data;
+        if (statusData.rewardAccount && statusData.health.status == 'true') {
+          statuses.push({
+            ...relayer,
+            statusData
+          });
+        }
+      } catch (e) {
+       // console.error(`Failed to fetch status for ${relayer.hostname}:`);
+      }
+    }
+
+    return statuses;
+  }
+
+  const registeredRelayers = await fetchGraphRelayers();
+  const validRelayers = await getValidRelayers(registeredRelayers, ensSubdomainKey);
+  const availableRelayersData = await getAvailableRelayersData(validRelayers);
+
+  return availableRelayersData;
+}
+
+/**
  * Erase all zero events from events tree array
  * @param events Events tree array
  */
@@ -970,7 +1074,7 @@ async function fetchEvents({ type, currency, amount, filterEvents }) {
   async function syncEvents() {
     try {
       let targetBlock = await web3.eth.getBlockNumber();
-      let chunks = 10000;
+      let chunks = 1000;
       console.log('Querying latest events from RPC');
 
       for (let i = startBlock; i < targetBlock; i += chunks) {
@@ -1172,6 +1276,7 @@ async function fetchEvents({ type, currency, amount, filterEvents }) {
       const latestTimestamp = await queryLatestTimestamp();
       if (latestTimestamp) {
         const getCachedBlock = await web3.eth.getBlock(startBlock);
+        console.log(getCachedBlock)
         const cachedTimestamp = getCachedBlock.timestamp;
         for (let i = cachedTimestamp; i < latestTimestamp; ) {
           const result = await queryFromGraph(i);
@@ -1354,54 +1459,60 @@ async function promptConfirmation() {
 }
 
 /**
- * Init web3, contracts, and snark
+ * Create web3 instance with provided RPC link
+ * @param {string} rpc Full RPC link
+ * @param {number} [torPort] TOR proxy port, if user provided it
+ * @returns {Promise<Web3>} Initialized Web3 instance object
  */
-async function init({ rpc, noteNetId, currency = 'dai', amount = '100', balanceCheck, localMode, privateKey }) {
-  let contractJson, instanceJson, erc20ContractJson, erc20tornadoJson, tokenAddress;
-  let ipOptions = {};
-
-  if (noteNetId && !rpc) rpc = config.deployments[`netId${noteNetId}`].defaultRpc;
-
+async function createWeb3Instance(rpc, torPort){
   if (torPort && rpc.startsWith('https')) {
     console.log('Using tor network');
     web3Options = { agent: { https: new SocksProxyAgent('socks5h://127.0.0.1:' + torPort) }, timeout: 60000 };
-    // Use forked web3-providers-http from local file to modify user-agent header value which improves privacy.
-    web3 = new Web3(new Web3.providers.HttpProvider(rpc, web3Options), null, { transactionConfirmationBlocks: 1 });
-    ipOptions = {
-      httpsAgent: new SocksProxyAgent('socks5h://127.0.0.1:' + torPort),
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; rv:91.0) Gecko/20100101 Firefox/91.0' }
-    };
+    return new Web3(new Web3.providers.HttpProvider(rpc, web3Options), null, { transactionConfirmationBlocks: 1 });
   } else if (torPort && rpc.startsWith('http')) {
     console.log('Using tor network');
     web3Options = { agent: { http: new SocksProxyAgent('socks5h://127.0.0.1:' + torPort) }, timeout: 60000 };
-    // Use forked web3-providers-http from local file to modify user-agent header value which improves privacy.
-    web3 = new Web3(new Web3.providers.HttpProvider(rpc, web3Options), null, { transactionConfirmationBlocks: 1 });
-    ipOptions = {
-      httpsAgent: new SocksProxyAgent('socks5h://127.0.0.1:' + torPort),
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; rv:91.0) Gecko/20100101 Firefox/91.0' }
-    };
+    return new Web3(new Web3.providers.HttpProvider(rpc, web3Options), null, { transactionConfirmationBlocks: 1 });
   } else if (rpc.includes('ipc')) {
     console.log('Using ipc connection');
-    web3 = new Web3(new Web3.providers.IpcProvider(rpc, {}), null, { transactionConfirmationBlocks: 1 });
+    return new Web3(new Web3.providers.IpcProvider(rpc, {}), null, { transactionConfirmationBlocks: 1 });
   } else if (rpc.startsWith('ws') || rpc.startsWith('wss')) {
     console.log('Using websocket connection (Note: Tor is not supported for Websocket providers)');
     web3Options = {
       clientConfig: { keepalive: true, keepaliveInterval: -1 },
       reconnect: { auto: true, delay: 1000, maxAttempts: 10, onTimeout: false }
     };
-    web3 = new Web3(new Web3.providers.WebsocketProvider(rpc, web3Options), null, { transactionConfirmationBlocks: 1 });
-    if (!(await web3.eth.net.isListening())) throw new Error('Cannot connect to websocket provider');
+    const web3instance = new Web3(new Web3.providers.WebsocketProvider(rpc, web3Options), null, { transactionConfirmationBlocks: 1 });
+    if (!(await web3instance.eth.net.isListening())) throw new Error('Cannot connect to websocket provider');
+    return web3instance;
   } else {
     console.log('Connecting to remote node');
-    web3 = new Web3(rpc, null, { transactionConfirmationBlocks: 1 });
+    return new Web3(rpc, null, { transactionConfirmationBlocks: 1 });
   }
+}
+
+/**
+ * Init web3 network from user parameters for all program
+ * @param {Object} args Arguments
+ * @param {string} [args.rpc] Full link to RPC node
+ * @param {number} [args.chainId] Chain ID (1 - ETH, 56 - BSC etc)
+ * @param {string} [args.privateKey] Private key from user account (64 symbols or 66 if starts from 0x)
+ */
+async function initNetwork({rpc, chainId, privateKey}) {
+
+  if (chainId && !rpc) rpc = config.deployments[`netId${chainId}`].defaultRpc;
+
+  web3 = await createWeb3Instance(rpc, torPort)
 
   const rpcHost = new URL(rpc).hostname;
   const isIpPrivate = is_ip_private(rpcHost);
 
   if (!isIpPrivate && !rpc.includes('localhost') && !privateRpc) {
     try {
-      const htmlIPInfo = await axios.get('https://check.torproject.org', ipOptions);
+      const htmlIPInfo = await axios.get('https://check.torproject.org', torPort ? {
+        httpsAgent: new SocksProxyAgent('socks5h://127.0.0.1:' + torPort),
+        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; rv:91.0) Gecko/20100101 Firefox/91.0' }
+      } : {});
       const ip = htmlIPInfo.data.split('Your IP address appears to be:  <strong>').pop().split('</')[0];
       console.log('Your remote IP address is', ip);
     } catch (error) {
@@ -1412,13 +1523,6 @@ async function init({ rpc, noteNetId, currency = 'dai', amount = '100', balanceC
     privateRpc = true;
   }
 
-  contractJson = require('./build/contracts/TornadoProxy.abi.json');
-  instanceJson = require('./build/contracts/Instance.abi.json');
-  circuit = require('./build/circuits/tornado.json');
-  provingKey = fs.readFileSync('build/circuits/tornadoProvingKey.bin').buffer;
-  MERKLE_TREE_HEIGHT = process.env.MERKLE_TREE_HEIGHT || 20;
-  ETH_AMOUNT = process.env.ETH_AMOUNT;
-  TOKEN_AMOUNT = process.env.TOKEN_AMOUNT;
   const privKey = privateKey || process.env.PRIVATE_KEY;
 
   if (privKey) {
@@ -1435,16 +1539,34 @@ async function init({ rpc, noteNetId, currency = 'dai', amount = '100', balanceC
     senderAccount = account.address;
   }
 
+  netId = await web3.eth.net.getId();
+  netName = getCurrentNetworkName();
+  netSymbol = getCurrentNetworkSymbol();
+}
+
+/**
+ * Init web3, all Tornado contracts, and snark
+ */
+async function init({ rpc, chainId, currency = 'dai', amount = '100', balanceCheck, localMode, privateKey }) {
+  await initNetwork({rpc, chainId, privateKey})
+
+  let contractJson, instanceJson, erc20ContractJson, erc20tornadoJson, tokenAddress;
+
+  contractJson = require('./build/contracts/TornadoProxy.abi.json');
+  instanceJson = require('./build/contracts/Instance.abi.json');
+  circuit = require('./build/circuits/tornado.json');
+  provingKey = fs.readFileSync('build/circuits/tornadoProvingKey.bin').buffer;
+  MERKLE_TREE_HEIGHT = process.env.MERKLE_TREE_HEIGHT || 20;
+  ETH_AMOUNT = process.env.ETH_AMOUNT;
+  TOKEN_AMOUNT = process.env.TOKEN_AMOUNT;
+
   erc20ContractJson = require('./build/contracts/ERC20Mock.json');
   erc20tornadoJson = require('./build/contracts/ERC20Tornado.json');
   // groth16 initialises a lot of Promises that will never be resolved, that's why we need to use process.exit to terminate the CLI
   groth16 = await buildGroth16();
-  netId = await web3.eth.net.getId();
-  netName = getCurrentNetworkName();
-  netSymbol = getCurrentNetworkSymbol();
   feeOracle = Number(netId) === 1 ? new TornadoFeeOracleV4(netId, rpc) : new TornadoFeeOracleV5(netId, rpc);
 
-  if (noteNetId && Number(noteNetId) !== netId) {
+  if (chainId && Number(chainId) !== netId) {
     throw new Error('This note is for a different network. Specify the --rpc option explicitly');
   }
   if (netName === 'testRPC') {
@@ -1521,7 +1643,7 @@ async function main() {
         amount,
         localMode: program.localRpc,
         privateKey: program.privateKey,
-        noteNetId: netId
+        chainId: netId
       });
       console.log('Creating', currency.toUpperCase(), amount, 'deposit for', netName, 'Tornado Cash Instance');
       await deposit({ currency, amount, commitmentNote });
@@ -1552,7 +1674,7 @@ async function main() {
 
       await init({
         rpc: program.rpc,
-        noteNetId: netId,
+        chainId: netId,
         currency,
         amount,
         localMode: program.localRpc,
@@ -1566,6 +1688,24 @@ async function main() {
         refund,
         relayerURL: program.relayer
       });
+    });
+  program
+    .command("listRelayers [chain_id]")
+    .description("Check available relayers on selected chain. If you wantue non-default RPC, you should provide ONLY mainnet RPC urls")
+    .action(async (chainId) => {
+      statePreferences(program);
+      await initNetwork({rpc: program.rpc, chainId: 1})
+      const availableRelayers = await getRelayers(chainId);
+      console.log("There are " + availableRelayers.length + " available relayers")
+
+      for(const relayer of availableRelayers){
+        console.log({
+          'hostname': 'https://' + relayer.hostname + '/',
+          'ensName': relayer.ensName,
+          'stakeBalance': Number(web3.utils.fromWei(relayer.stakeBalance, 'ether')).toFixed(2)+" TORN",
+          'tornadoServiceFee': relayer.statusData.tornadoServiceFee + "%"
+        });
+      }
     });
   program
     .command('balance [address] [token_address]')
@@ -1611,7 +1751,7 @@ async function main() {
 
       const { currency, amount, netId, deposit } = parseNote(noteString);
 
-      await init({ rpc: program.rpc, noteNetId: netId, currency, amount });
+      await init({ rpc: program.rpc, chainId: netId, currency, amount });
 
       const depositInfo = await loadDepositData({ amount, currency, deposit });
       const withdrawInfo = await loadWithdrawalData({ amount, currency, deposit });

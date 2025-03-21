@@ -109,8 +109,9 @@ module.exports = {
       ensSubdomainKey: 'mainnet-tornado',
       proxy: '0xd90e2f925DA726b50C4Ed8D0Fb90Ad053324F31b',
       multicall: '0xeefBa1e63905eF1D7ACbA5a8513c70307C1cE441',
-      subgraph: 'https://gateway.thegraph.com/api/6a217817dd87d33db10beed79b044a91/subgraphs/id/Ec6fVMDVqXTDQZ3c4jxcyV3zBXqkdgMWfhdtCgtqn7Sh',
-      defaultRpc: 'https://mainnet.chainnodes.org/d692ae63-0a7e-43e0-9da9-fe4f4cc6c607'
+      subgraph: 'https://tornadocash-rpc.com/subgraphs/name/tornadocash/mainnet-tornado-subgraph',
+      relayerSubgraph: 'https://gateway.thegraph.com/api/6a217817dd87d33db10beed79b044a91/subgraphs/id/DgKwfAbLfynpiq7fDJy59LDnVnia4Y5nYeRDBYi9qezc',
+      defaultRpc: 'https://tornadocash-rpc.com'
     },
     netId56: {
       tokens: {
@@ -135,8 +136,8 @@ module.exports = {
       ensSubdomainKey: 'bsc-tornado',
       proxy: '0x0D5550d52428E7e3175bfc9550207e4ad3859b17',
       multicall: '0x41263cBA59EB80dC200F3E2544eda4ed6A90E76C',
-      subgraph: 'https://gateway.thegraph.com/api/6a217817dd87d33db10beed79b044a91/subgraphs/id/CiwGzefDBZCavXRPnwarnnF8xDDoLw4boBuySomJWYnV',
-      defaultRpc: 'https://bsc-mainnet.chainnodes.org/d692ae63-0a7e-43e0-9da9-fe4f4cc6c607'
+      subgraph: 'https://tornadocash-rpc.com/subgraphs/name/tornadocash/bsc-tornado-subgraph',
+      defaultRpc: 'https://1rpc.io/bnb'
     },
     netId100: {
       tokens: {
@@ -161,7 +162,7 @@ module.exports = {
       ensSubdomainKey: 'gnosis-tornado',
       proxy: '0x0D5550d52428E7e3175bfc9550207e4ad3859b17',
       multicall: '0xb5b692a88BDFc81ca69dcB1d924f59f0413A602a',
-      subgraph: 'https://api.thegraph.com/subgraphs/name/tornadocash/xdai-tornado-subgraph',
+      subgraph: 'https://tornadocash-rpc.com/subgraphs/name/tornadocash/optimism-tornado-subgraph',
       defaultRpc: 'https://gnosis-mainnet.chainnodes.org/d692ae63-0a7e-43e0-9da9-fe4f4cc6c607'
     },
     netId137: {
@@ -187,7 +188,7 @@ module.exports = {
       ensSubdomainKey: 'polygon-tornado',
       proxy: '0x0D5550d52428E7e3175bfc9550207e4ad3859b17',
       multicall: '0x11ce4B23bD875D7F5C6a31084f55fDe1e9A87507',
-      subgraph: 'https://gateway.thegraph.com/api/d2db349f28c895aa2272421996404c8d/subgraphs/id/HUMgwMYNrPQpnBJgesFXyy5u6jSiJ6u5nNWQng9ayCmD',
+      subgraph: 'https://tornadocash-rpc.com/subgraphs/name/tornadocash/matic-tornado-subgraph',
       defaultRpc: 'https://polygon-mainnet.chainnodes.org/d692ae63-0a7e-43e0-9da9-fe4f4cc6c607'
     },
     netId42161: {
@@ -213,7 +214,7 @@ module.exports = {
       ensSubdomainKey: 'arbitrum-tornado',
       proxy: '0x0D5550d52428E7e3175bfc9550207e4ad3859b17',
       multicall: '0xB064Fe785d8131653eE12f3581F9A55F6D6E1ca3',
-      subgraph: 'https://gateway.thegraph.com/api/d2db349f28c895aa2272421996404c8d/subgraphs/id/8x8o6XFAqYZmiPwrJ51UxGTaZLYyW1fFtghvsEy7a1KJ',
+      subgraph: 'https://tornadocash-rpc.com/subgraphs/name/tornadocash/arbitrum-tornado-subgraph',
       defaultRpc: 'https://arbitrum-one.chainnodes.org/d692ae63-0a7e-43e0-9da9-fe4f4cc6c607'
     },
     netId43114: {
@@ -237,7 +238,7 @@ module.exports = {
       ensSubdomainKey: 'avalanche-tornado',
       proxy: '0x0D5550d52428E7e3175bfc9550207e4ad3859b17',
       multicall: '0x98e2060F672FD1656a07bc12D7253b5e41bF3876',
-      subgraph: 'https://gateway.thegraph.com/api/d2db349f28c895aa2272421996404c8d/subgraphs/id/CqUYVKJT9Jsyt7qnGNrf4FJNHw75ZbFGuzaJgqdaFASo',
+      subgraph: 'https://tornadocash-rpc.com/subgraphs/name/tornadocash/avalanche-tornado-subgraph',
       defaultRpc: 'https://avalanche-rpc.tornado.ws/ext/bc/C/rpc'
     },
     netId10: {
@@ -263,8 +264,8 @@ module.exports = {
       ensSubdomainKey: 'optimism-tornado',
       proxy: '0x0D5550d52428E7e3175bfc9550207e4ad3859b17',
       multicall: '0x142E2FEaC30d7fc3b61f9EE85FCCad8e560154cc',
-      subgraph: 'https://api.thegraph.com/subgraphs/name/tornadocash/optimism-tornado-subgraph',
-      defaultRpc: 'https://optimism-mainnet.chainnodes.org/d692ae63-0a7e-43e0-9da9-fe4f4cc6c607'
+      subgraph: 'https://tornadocash-rpc.com/subgraphs/name/tornadocash/optimism-tornado-subgraph',
+      defaultRpc: 'https://optimism.blockpi.network/v1/rpc/public'
     }
   }
 };
