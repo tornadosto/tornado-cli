@@ -461,8 +461,8 @@ async function generateProof({ deposit, currency, amount, recipient, relayerAddr
  * @param noteString Note to withdraw
  * @param recipient Recipient address
  */
-async function withdraw({ deposit, currency, amount, recipient, relayerURL, refund }) {
-  let options = {};
+async function withdraw({ deposit, currency, amount, recipient, relayerURL, refund, privateKey }) {
+  let options = {timeout: 5000};
   if (currency === netSymbol.toLowerCase() && refund && refund !== '0') {
     throw new Error('The ETH purchase is supposed to be 0 for ETH withdrawals');
   }
@@ -474,30 +474,58 @@ async function withdraw({ deposit, currency, amount, recipient, relayerURL, refu
     throw new Error('Recipient address is not valid');
   }
 
-  if (relayerURL) {
-    if (relayerURL.endsWith('.eth')) {
-      throw new Error(
-        'ENS name resolving is not supported. Please provide DNS name of the relayer. See instuctions in README.md'
-      );
-    }
-    if (torPort) {
+  if (privateKey || process.env.PRIVATE_KEY) {
+    // using private key
+
+    // check if the address of recepient matches with the account of provided private key from environment to prevent accidental use of deposit address for withdrawal transaction.
+    assert(
+      recipient.toLowerCase() == senderAccount.toLowerCase(),
+      'Withdrawal recepient mismatches with the account of provided private key from environment file'
+    );
+    const checkBalance = await web3.eth.getBalance(senderAccount);
+    assert(checkBalance !== 0, 'You have 0 balance, make sure to fund account by withdrawing from tornado using relayer first');
+
+    const { proof, args } = await generateProof({ deposit, currency, amount, recipient, refund });
+
+    console.log('Submitting withdraw transaction');
+    await generateTransaction(
+      tornadoProxyAddress,
+      tornado.methods.withdraw(tornadoInstance, proof, ...args).encodeABI(),
+      toBN(args[5]),
+      'user_withdrawal'
+    );
+  }
+  else {
+    if (torPort) 
       options = {
+        ...options,
         httpsAgent: new SocksProxyAgent('socks5h://127.0.0.1:' + torPort),
         headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; rv:91.0) Gecko/20100101 Firefox/91.0' }
       };
+
+    let relayerInfo;
+    if (relayerURL) {
+      try {
+        relayerURL = new URL(relayerURL).origin;
+        res = await axios.get(relayerURL + '/status', options);
+        relayerInfo = res.data;
+      } catch (err) {
+        console.error(err);
+        throw new Error('Cannot get relayer status');
+      }
+    }
+    else {
+      const availableRelayers = await getRelayers(netId);
+      if(availableRelayers.length === 0) throw new Error("Cannot automatically pick a relayer to withdraw your note. Provide relayer manually with `--relayer` cmd option or use private key withdrawal")
+      relayerInfo = pickWeightedRandomRelayer(availableRelayers);
+      relayerURL = "https://" + relayerInfo.hostname
+      console.log(`Selected relayer: ${relayerURL}`)
     }
 
-    let relayerStatus;
-    try {
-      relayerURL = new URL(relayerURL).origin;
-      relayerStatus = await axios.get(relayerURL + '/status', options);
-    } catch (err) {
-      console.error(err);
-      throw new Error('Cannot get relayer status');
-    }
+ 
 
-    const { rewardAccount, netId, ethPrices, tornadoServiceFee } = relayerStatus.data;
-    assert(netId === (await web3.eth.net.getId()) || netId === '*', 'This relay is for different network');
+    const { rewardAccount, netId: relayerNetId, ethPrices, tornadoServiceFee } = relayerInfo;
+    assert(relayerNetId === (await web3.eth.net.getId()) || relayerNetId === '*', 'This relay is for different network');
     console.log('Relay address:', rewardAccount);
 
     const decimals = isTestRPC ? 18 : config.deployments[`netId${netId}`]['tokens'][currency].decimals;
@@ -577,27 +605,8 @@ async function withdraw({ deposit, currency, amount, recipient, relayerURL, refu
     } catch (e) {
       console.error(e.message);
     }
-  } else {
-    // using private key
+  } 
 
-    // check if the address of recepient matches with the account of provided private key from environment to prevent accidental use of deposit address for withdrawal transaction.
-    assert(
-      recipient.toLowerCase() == senderAccount.toLowerCase(),
-      'Withdrawal recepient mismatches with the account of provided private key from environment file'
-    );
-    const checkBalance = await web3.eth.getBalance(senderAccount);
-    assert(checkBalance !== 0, 'You have 0 balance, make sure to fund account by withdrawing from tornado using relayer first');
-
-    const { proof, args } = await generateProof({ deposit, currency, amount, recipient, refund });
-
-    console.log('Submitting withdraw transaction');
-    await generateTransaction(
-      tornadoProxyAddress,
-      tornado.methods.withdraw(tornadoInstance, proof, ...args).encodeABI(),
-      toBN(args[5]),
-      'user_withdrawal'
-    );
-  }
   if (currency === netSymbol.toLowerCase()) {
     await printETHBalance({ address: recipient, name: 'Recipient' });
   } else {
@@ -914,9 +923,10 @@ async function selectDefaultRpc(chainId){
 /**
  * Get available relayers data for selected chain
  * @param {string | number} chainId 
- * @returns {Array<Object>} List of available relayers
+ * @returns {Promise<Array<Object>>} List of available relayers
  */
 async function getRelayers(chainId){
+  console.log("Fetching relayers...")
   let localWeb3 = web3;
   if (netId != 1) {
     mainnetRpc = await selectDefaultRpc(1);
@@ -931,12 +941,20 @@ async function getRelayers(chainId){
   const relayerGraphApi = config.deployments["netId1"].relayerSubgraph;
   const relayerSubdomains = Object.values(config.deployments).map(({ ensSubdomainKey }) => ensSubdomainKey)
 
+  let options;
+  if (torPort) {
+    options = {
+      httpsAgent: new SocksProxyAgent('socks5h://127.0.0.1:' + torPort),
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; rv:91.0) Gecko/20100101 Firefox/91.0' }
+    };
+  }
+
   async function fetchGraphRelayers() {
     try{
-      const res = await axios.post(relayerGraphApi, { 'query': '{ relayers(first: 1000) {\n    id\n    address\n    ensName\n    ensHash\n  }\n}' });
+      const res = await axios.post(relayerGraphApi, { 'query': '{ relayers(first: 1000) {\n    id\n    address\n    ensName\n    ensHash\n  }\n}' }, options);
       return res.data.data.relayers;
     } catch(e){
-      console.error("Relayers subgraph API not responding");
+      throw new Error("Relayers subgraph API not responding");
     }
   }
   
@@ -981,12 +999,12 @@ async function getRelayers(chainId){
     let statuses = [];
     for (const relayer of relayers) {
       try {
-        const res = await axios.get(`https://${relayer.hostname}/status`, {timeout: 5000});
+        const res = await axios.get(`https://${relayer.hostname}/status`, Object.assign({timeout: 5000}, options));
         const statusData = res.data;
         if (statusData.rewardAccount && statusData.health.status == 'true') {
           statuses.push({
             ...relayer,
-            statusData
+            ...statusData
           });
         }
       } catch (e) {
@@ -1001,8 +1019,59 @@ async function getRelayers(chainId){
   const validRelayers = await getValidRelayers(registeredRelayers, ensSubdomainKey);
   const availableRelayersData = await getAvailableRelayersData(validRelayers);
 
+  console.log(`Found ${availableRelayersData.length} available relayers`)
+
   return availableRelayersData;
 }
+
+/**
+ * Select random relayer from provided list using formula from Tornado Cash docs: https://docs.tornado.ws/general/guides/relayer.html
+ * @param {Array<Object>} relayers List of relayers
+ * @returns {Object} One selected relayer
+ */
+function pickWeightedRandomRelayer(relayers) {
+  function calculateScore({ stakeBalance, tornadoServiceFee }, minFee = 0.33, maxFee = 0.53) {
+    if (tornadoServiceFee < minFee) {
+      tornadoServiceFee = minFee
+    } else if (tornadoServiceFee >= maxFee) {
+      return new BigNumber(0)
+    }
+    const serviceFeeCoefficient = (tornadoServiceFee - minFee) ** 2
+    const feeDiffCoefficient = 1 / (maxFee - minFee) ** 2
+    const coefficientsMultiplier = 1 - feeDiffCoefficient * serviceFeeCoefficient
+    
+    return new BigNumber(stakeBalance).multipliedBy(coefficientsMultiplier)
+  }
+
+  function getWeightRandom(weightsScores, random) {
+    for (let i = 0; i < weightsScores.length; i++) {
+      if (random.isLessThan(weightsScores[i])) {
+        return i
+      }
+      random = random.minus(weightsScores[i])
+    }
+    return Math.floor(Math.random() * weightsScores.length)
+  }
+  
+  
+  let minFee, maxFee
+
+  if (netId != 1) {
+    minFee = 0.01
+    maxFee = 0.3
+  }
+
+  const weightsScores = relayers.map((el) => calculateScore(el, minFee, maxFee))
+  const totalWeight = weightsScores.reduce((acc, curr) => {
+    return (acc = acc.plus(curr))
+  }, new BigNumber('0'))
+
+  const random = totalWeight.multipliedBy(Math.random())
+  const weightRandomIndex = getWeightRandom(weightsScores, random)
+
+  return relayers[weightRandomIndex]
+}
+
 
 /**
  * Erase all zero events from events tree array
@@ -1014,16 +1083,14 @@ function filterZeroEvents(events) {
 
 function loadCachedEvents({ type, currency, amount }) {
   try {
-    const module = require(`./cache/${netName.toLowerCase()}/${type}s_${currency.toLowerCase()}_${amount}.json`);
+    const events = require(`./cache/${netName.toLowerCase()}/${type}s_${currency.toLowerCase()}_${amount}.json`);
 
-    if (module) {
-      const events = module;
-
-      return {
-        events: filterZeroEvents(events),
-        lastBlock: events[events.length - 1].blockNumber
-      };
-    }
+    if (!events || events.length === 0) throw new Error("Invalid cached events file")
+      
+    return {
+      events: filterZeroEvents(events),
+      lastBlock: events[events.length - 1].blockNumber
+    };
   } catch (err) {
     console.log('Error fetching cached files, syncing from block', deployedBlockNumber);
     return {
@@ -1276,7 +1343,6 @@ async function fetchEvents({ type, currency, amount, filterEvents }) {
       const latestTimestamp = await queryLatestTimestamp();
       if (latestTimestamp) {
         const getCachedBlock = await web3.eth.getBlock(startBlock);
-        console.log(getCachedBlock)
         const cachedTimestamp = getCachedBlock.timestamp;
         for (let i = cachedTimestamp; i < latestTimestamp; ) {
           const result = await queryFromGraph(i);
@@ -1686,6 +1752,7 @@ async function main() {
         amount,
         recipient,
         refund,
+        privateKey: program.privateKey,
         relayerURL: program.relayer
       });
     });
@@ -1703,7 +1770,7 @@ async function main() {
           'hostname': 'https://' + relayer.hostname + '/',
           'ensName': relayer.ensName,
           'stakeBalance': Number(web3.utils.fromWei(relayer.stakeBalance, 'ether')).toFixed(2)+" TORN",
-          'tornadoServiceFee': relayer.statusData.tornadoServiceFee + "%"
+          'tornadoServiceFee': relayer.tornadoServiceFee + "%"
         });
       }
     });

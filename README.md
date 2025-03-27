@@ -71,7 +71,7 @@ $ node cli.js withdraw <note> <recipient> --rpc <rpc url> --relayer <relayer url
 Note that `--relayer <relayer url>`, `--tor <torPort>` and `--rpc <rpc url>` are optional parameters, and use `--private-key <private key>` only if you withdraw without relayer.
 You can don't provide RPC link and withdrawal will be made via default RPC for the chain to which note belongs.
 
-If you want to use Tornado Cash relayer for your first withdrawal to your new ethereum account, you can use `listRelayers` command to get list of available relayers for your chain.
+If you want to use Tornado Cash relayer for your first withdrawal to your new ethereum account, you can use `listRelayers` command to get list of available relayers for your chain or just don't specify relayer at all - it will fetch relayer autimatic, as in UI.
 
 If you don't need relayer while doing withdrawals, you must provide your withdrawal account's private key - either as parameter, or by adding it to `.env` file.
 

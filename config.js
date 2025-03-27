@@ -136,7 +136,7 @@ module.exports = {
       ensSubdomainKey: 'bsc-tornado',
       proxy: '0x0D5550d52428E7e3175bfc9550207e4ad3859b17',
       multicall: '0x41263cBA59EB80dC200F3E2544eda4ed6A90E76C',
-      subgraph: 'https://tornadocash-rpc.com/subgraphs/name/tornadocash/bsc-tornado-subgraph',
+      subgraph: 'https://gateway.thegraph.com/api/6a217817dd87d33db10beed79b044a91/subgraphs/id/CiwGzefDBZCavXRPnwarnnF8xDDoLw4boBuySomJWYnV',
       defaultRpc: 'https://1rpc.io/bnb'
     },
     netId100: {
