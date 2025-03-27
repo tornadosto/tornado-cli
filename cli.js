@@ -1112,15 +1112,23 @@ async function fetchEvents({ type, currency, amount, filterEvents }) {
   console.log('Loaded cached', amount, currency.toUpperCase(), type, 'events for', startBlock, 'block');
   console.log('Fetching', amount, currency.toUpperCase(), type, 'events for', netName, 'network');
 
+  /**
+   * Updates local events cache file for one Tornado cash instance, for example, deposit events for 1 ETH pool
+   * @param {Array<Object>} fetchedEvents Array of new events fetched from RPC or Graph
+   */
   async function updateCache(fetchedEvents) {
     if (type === 'deposit') fetchedEvents.sort((firstLeaf, secondLeaf) => firstLeaf.leafIndex - secondLeaf.leafIndex);
 
     try {
       const fileName = `./cache/${netName.toLowerCase()}/${type}s_${currency.toLowerCase()}_${amount}.json`;
-      const localEvents = await initJson(fileName);
-      const events = filterZeroEvents(localEvents).concat(fetchedEvents);
+      const savedEvents = await initJson(fileName);
+      const cachedEvents = filterZeroEvents(savedEvents);
+      // Because we fetch some events twice from graph, and we assume that cached events are sorted, we can erase duplicated events simply from the start of fetched array
+      const deduplicatedFetchedEvents = fetchedEvents.slice(fetchedEvents.findIndex(event => event?.transactionHash === cachedEvents[cachedEvents.length - 1]?.transactionHash) + 1)
+      const events = cachedEvents.concat(deduplicatedFetchedEvents);
       fs.writeFileSync(fileName, JSON.stringify(events, null, 2), 'utf8');
     } catch (error) {
+      console.log(error)
       throw new Error('Writing cache file failed:', error);
     }
   }
@@ -1345,25 +1353,13 @@ async function fetchEvents({ type, currency, amount, filterEvents }) {
         const getCachedBlock = await web3.eth.getBlock(startBlock);
         const cachedTimestamp = getCachedBlock.timestamp;
         for (let i = cachedTimestamp; i < latestTimestamp; ) {
-          const result = await queryFromGraph(i);
-          if (Object.keys(result).length === 0) {
-            i = latestTimestamp;
-          } else {
-            if (type === 'deposit') {
-              const resultBlock = result[result.length - 1].blockNumber;
-              const resultTimestamp = result[result.length - 1].timestamp;
-              await updateCache(result);
-              i = resultTimestamp;
-              console.log('Fetched', amount, currency.toUpperCase(), type, 'events to block:', Number(resultBlock));
-            } else {
-              const resultBlock = result[result.length - 1].blockNumber;
-              const getResultBlock = await web3.eth.getBlock(resultBlock);
-              const resultTimestamp = getResultBlock.timestamp;
-              await updateCache(result);
-              i = resultTimestamp;
-              console.log('Fetched', amount, currency.toUpperCase(), type, 'events to block:', Number(resultBlock));
-            }
-          }
+          const result = await queryFromGraph(i - 1);
+          if (Object.keys(result).length === 0) break;
+          const resultBlockNumber = result[result.length - 1].blockNumber;
+          const resultTimestamp = type === "deposit" ? result[result.length - 1].timestamp : (await web3.eth.getBlock(resultBlockNumber)).timestamp;
+          await updateCache(result);
+          i = resultTimestamp;
+          console.log('Fetched', amount, currency.toUpperCase(), type, 'events to block:', Number(resultBlockNumber));
         }
       } else {
         console.log('Fallback to web3 events');
