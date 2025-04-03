@@ -6,16 +6,15 @@ const axios = require('axios');
 const assert = require('assert');
 const snarkjs = require('@tornado/snarkjs');
 const crypto = require('crypto');
-const namehash = require('eth-ens-namehash');
 const circomlib = require('@tornado/circomlib');
 const bigInt = snarkjs.bigInt;
-const merkleTree = require('@tornado/fixed-merkle-tree');
+const MerkleTree = require('@tornado/fixed-merkle-tree');
 const Web3 = require('web3');
+const web3Utils = require("web3-utils")
 const buildGroth16 = require('@tornado/websnark/src/groth16');
 const websnarkUtils = require('@tornado/websnark/src/utils');
 const { toWei, fromWei, toBN, BN } = require('web3-utils');
 const BigNumber = require('bignumber.js');
-const config = require('./config');
 const program = require('commander');
 const { TornadoFeeOracleV4, TornadoFeeOracleV5 } = require('@tornado/tornado-oracles');
 const { SocksProxyAgent } = require('socks-proxy-agent');
@@ -23,33 +22,80 @@ const is_ip_private = require('private-ip');
 const readline = require('readline');
 
 const prompt = readline.createInterface({ input: process.stdin, output: process.stdout });
-const gasSpeedPreferences = ['instant', 'fast', 'standard', 'low'];
 
-let web3,
-  torPort,
-  tornado,
-  tornadoProxyAddress,
-  tornadoContract,
-  tornadoInstance,
-  circuit,
-  provingKey,
-  groth16,
-  erc20,
-  senderAccount,
-  netId,
-  netName,
-  netSymbol,
-  multiCall,
-  subgraph,
-  feeOracle;
-let MERKLE_TREE_HEIGHT, ETH_AMOUNT, TOKEN_AMOUNT, PRIVATE_KEY;
+const config = require('./config');
+const erc20Abi = require('./abis/ERC20.abi.json');
+const tornadoProxyAbi = require('./abis/TornadoProxy.abi.json');
+const tornadoInstanceAbi = require('./abis/Instance.abi.json');
+const relayerRegistryAbi = require("./abis/RelayerRegistry.abi.json");
+const relayerAggregatorAbi = require('./abis/Aggregator.abi');
 
-/** Command state parameters */
-let preferenceSpeed = gasSpeedPreferences[0];
-let isTestRPC = false;
-let shouldPromptConfirmation = true;
-let doNotSubmitTx, privateRpc;
-/** ----------------------------------------- **/
+const relayerAggregatorAddress = config.deployments[`netId1`].relayerAggregator;
+const relayerRegistryAddress = config.deployments[`netId1`].relayerRegistry;
+const relayerRegistryDeployedBlockNumber = config.deployments["netId1"].relayerRegistryDeployedBlockNumber;
+const relayerSubdomains = Object.values(config.deployments).map(({ ensSubdomainKey }) => ensSubdomainKey);
+
+/** @typedef {import ("web3-eth-contract").Contract} Web3Contract */
+/** @typedef {import ("web3-eth").Eth} Web3Eth */
+/** @typedef {('deposit' | 'withdrawal' | 'relayer')} EventType */
+
+/**
+ * @typedef RequestOptions
+ * @type {Object}
+ * @property {number} timeout Timeout in milliseconds
+ * @property {SocksProxyAgent} [httpsAgent] Proxy agent instance, if user selected Tor proxy
+ * @property {Object} [headers] Headers for request, for exmple, User-Agent, if needed
+ */
+
+/**
+ * @typedef ProgramGlobals
+ * @type {Object}
+ * @property {string} [privateKey] User-provided private key for Ethereum account
+ * @property {Web3Eth} [web3Instance] Instance of Web3 Eth to interact with blockchain networks
+ * @property {Web3Eth} [relayerWeb3Instance] Instance of Web3 Eth to interact with Ethereum Mainnet
+ * @property {boolean} useOnlyRpc If true, use only RPC without third-party requests (IP detection, subgraph API)
+ * @property {boolean} shouldPromptConfirmation Ask user for confirmation in interactive mode for crucial actions (withdraw note, send money)
+ * @property {boolean} shouldSubmitTx If false, don't broadcast signed transaction to the node
+ * @property {number} [torPort] Port to send all requests through tor
+ * @property {RequestOptions} requestOptions Axios options for network requests (timeout, proxy)
+ * @property {string} [multiCallAddress] Address of Multicall contract for selected chain
+ * @property {string} [tornadoProxyAddress] Address of Tornado Proxy contract for selected chain
+ * @property {string} [tornadoInstanceAddress] Tornado Cash instance contract address for selected pool (chain/currency/value)
+ * @property {string} [instanceTokenAddress] Token address for Tornado Cash pool instance for selected token
+ * @property {number} [instanceDeployedBlockNumber] Block number in which instance contract was deployed in blockchain
+ * @property {string} [signerAddress] Address of signer account (user account, generated from provided private key)
+ * @property {TornadoFeeOracleV4 | TornadoFeeOracleV5} [feeOracle] Oracle instance for fetching gas price and calculate network fees (gas) for Tornado transactions
+ * @property {Web3Contract} [tornadoInstanceContract] Tornado cash instance contract for selected pool (chain/currency/value)
+ * @property {Web3Contract} [tornadoProxyContract] Tornado cash proxy contract for selected chain
+ * @property {Web3Contract} [tornadoTokenInstanceContract] Tornado Cash instance contract for selected token pool (for ERC20 token mixing pools, e.g. DAI)
+ * @property {string} netName Network (chain) human-readable name
+ * @property {string} netSymbol Network main token symbol (ETH for Ethereum mainnet and so on)
+ * @property {string} netId Network (chain) ID
+ */
+
+/** @type {ProgramGlobals} */
+const globals = {
+  privateKey: undefined,
+  web3Instance: undefined,
+  relayerWeb3Instance: undefined,
+  useOnlyRpc: false,
+  shouldPromptConfirmation: true,
+  shouldSubmitTx: true,
+  torPort: undefined,
+  requestOptions: { timeout: 10000 },
+  multiCallAddress: undefined,
+  tornadoProxyAddress: undefined,
+  tornadoInstanceAddress: undefined,
+  instanceTokenAddress: undefined,
+  instanceDeployedBlockNumber: undefined,
+  signerAddress: undefined,
+  feeOracle: undefined,
+  tornadoInstanceContract: undefined,
+  tornadoProxyContract: undefined,
+  netName: "Ethereum",
+  netSymbol: "ETH",
+  netId: 1
+}
 
 /** Generate random number of specified byte length */
 const rbigint = (nbytes) => snarkjs.bigInt.leBuff2int(crypto.randomBytes(nbytes));
@@ -74,50 +120,57 @@ function rmDecimalBN(bigNum, decimals = 6) {
 
 /** Use MultiCall Contract */
 async function useMultiCall(queryArray) {
-  const multiCallABI = require('./build/contracts/Multicall.abi.json');
-  const multiCallContract = new web3.eth.Contract(multiCallABI, multiCall);
+  const multiCallABI = require('./abis/Multicall.abi.json');
+  const multiCallContract = new globals.web3Instance.Contract(multiCallABI, globals.multiCallAddress);
   const { returnData } = await multiCallContract.methods.aggregate(queryArray).call();
   return returnData;
 }
 
 /** Display ETH account balance */
 async function printETHBalance({ address, name }) {
-  const checkBalance = new BigNumber(await web3.eth.getBalance(address)).div(BigNumber(10).pow(18));
+  const { netSymbol, web3Instance } = globals;
+  const checkBalance = new BigNumber(await web3Instance.getBalance(address)).div(BigNumber(10).pow(18));
   console.log(`${name} balance is`, rmDecimalBN(checkBalance), `${netSymbol}`);
 }
 
 /** Display ERC20 account balance */
 async function printERC20Balance({ address, name, tokenAddress }) {
+  const { web3Instance, multiCallAddress } = globals;
   let tokenDecimals, tokenBalance, tokenName, tokenSymbol;
-  const erc20ContractJson = require('./build/contracts/ERC20Mock.json');
-  erc20 = tokenAddress ? new web3.eth.Contract(erc20ContractJson.abi, tokenAddress) : erc20;
-  if (!isTestRPC && !multiCall) {
+  const erc20Contract = tokenAddress ? new web3Instance.Contract(erc20Abi, tokenAddress) : globals.tornadoTokenInstanceContract;
+  if (!multiCallAddress) {
     const tokenCall = await useMultiCall([
-      [tokenAddress, erc20.methods.balanceOf(address).encodeABI()],
-      [tokenAddress, erc20.methods.decimals().encodeABI()],
-      [tokenAddress, erc20.methods.name().encodeABI()],
-      [tokenAddress, erc20.methods.symbol().encodeABI()]
+      [tokenAddress, erc20Contract.methods.balanceOf(address).encodeABI()],
+      [tokenAddress, erc20Contract.methods.decimals().encodeABI()],
+      [tokenAddress, erc20Contract.methods.name().encodeABI()],
+      [tokenAddress, erc20Contract.methods.symbol().encodeABI()]
     ]);
     tokenDecimals = parseInt(tokenCall[1]);
     tokenBalance = new BigNumber(tokenCall[0]).div(BigNumber(10).pow(tokenDecimals));
-    tokenName = web3.eth.abi.decodeParameter('string', tokenCall[2]);
-    tokenSymbol = web3.eth.abi.decodeParameter('string', tokenCall[3]);
+    tokenName = web3Instance.abi.decodeParameter('string', tokenCall[2]);
+    tokenSymbol = web3Instance.abi.decodeParameter('string', tokenCall[3]);
   } else {
-    tokenDecimals = await erc20.methods.decimals().call();
-    tokenBalance = new BigNumber(await erc20.methods.balanceOf(address).call()).div(BigNumber(10).pow(tokenDecimals));
-    tokenName = await erc20.methods.name().call();
-    tokenSymbol = await erc20.methods.symbol().call();
+    tokenDecimals = await erc20Contract.methods.decimals().call();
+    tokenBalance = new BigNumber(await erc20Contract.methods.balanceOf(address).call()).div(BigNumber(10).pow(tokenDecimals));
+    tokenName = await erc20Contract.methods.name().call();
+    tokenSymbol = await erc20Contract.methods.symbol().call();
   }
   console.log(`${name}`, tokenName, `Balance is`, rmDecimalBN(tokenBalance), tokenSymbol);
 }
 
 /**
+ * @typedef TreeData
+ * @type {Object}
+ * @property {string[]} leaves Commitment hashes converted to decimals
+ * @property {MerkleTree} tree Builded merkle tree
+ * @property {string} root Merkle tree root
+ */
+
+/**
  * Compute merkle tree and its root from array of cached deposit events
  * @param {Array} depositEvents Array of deposit event objects
- * @returns {Object} treeData
- * @returns {String[]} treeData.leaves Commitment hashes converted to decimals
- * @returns {MerkleTree} treeData.tree Builded merkle tree
- * @returns {String} treeData.root Merkle tree root
+ * @returns {TreeData}
+
  */
 function computeDepositEventsTree(depositEvents) {
   const leaves = depositEvents
@@ -125,7 +178,8 @@ function computeDepositEventsTree(depositEvents) {
     .map((e) => toBN(e.commitment).toString(10)); // Leaf = commitment pedersen hash of deposit
 
   console.log('Computing deposit events merkle tree and its root');
-  const tree = new merkleTree(MERKLE_TREE_HEIGHT, leaves);
+  const merkleTreeHeight = process.env.MERKLE_TREE_HEIGHT || 20;
+  const tree = new MerkleTree(merkleTreeHeight, leaves);
 
   return { leaves, tree, root: tree.root() };
 }
@@ -139,14 +193,14 @@ function computeDepositEventsTree(depositEvents) {
  */
 async function isRootValid(depositEvents) {
   const { root } = computeDepositEventsTree(depositEvents);
-  const isRootValid = await tornadoContract.methods.isKnownRoot(toHex(root)).call();
+  const isRootValid = await globals.tornadoInstanceContract.methods.isKnownRoot(toHex(root)).call();
 
   return isRootValid;
 }
 
 async function submitTransaction(signedTX) {
   console.log('Submitting transaction to the remote node');
-  await web3.eth
+  await globals.web3Instance
     .sendSignedTransaction(signedTX)
     .on('transactionHash', function (txHash) {
       console.log(`View transaction on block explorer https://${getExplorerLink()}/tx/${txHash}`);
@@ -157,7 +211,8 @@ async function submitTransaction(signedTX) {
 }
 
 async function generateTransaction(to, encodedData, value = 0, txType = 'other') {
-  const nonce = await web3.eth.getTransactionCount(senderAccount);
+  const { signerAddress, privateKey, netSymbol, netId, web3Instance, shouldPromptConfirmation } = globals;
+  const nonce = await web3Instance.getTransactionCount(signerAddress);
 
   value = toBN(value);
 
@@ -166,14 +221,13 @@ async function generateTransaction(to, encodedData, value = 0, txType = 'other')
     value: value.toString(),
     data: encodedData
   };
-  if (txType === 'send') incompletedTx['from'] = senderAccount;
-
-  const { gasPrice, gasLimit } = await feeOracle.getGasParams({ tx: incompletedTx, txType });
+  if (txType === 'send') incompletedTx['from'] = signerAddress;
+  const { gasPrice, gasLimit } = await globals.feeOracle.getGasParams({ tx: incompletedTx, txType });
   const gasCosts = toBN(gasPrice).mul(toBN(gasLimit));
   const totalCosts = value.add(gasCosts);
 
   /** Transaction details */
-  console.log('Gas price: ', web3.utils.hexToNumber(gasPrice));
+  console.log('Gas price: ', web3Utils.hexToNumber(gasPrice));
   console.log('Gas limit: ', gasLimit);
   console.log('Transaction fee: ', rmDecimalBN(fromWei(gasCosts), 12), `${netSymbol}`);
   console.log('Transaction cost: ', rmDecimalBN(fromWei(totalCosts), 12), `${netSymbol}`);
@@ -187,7 +241,7 @@ async function generateTransaction(to, encodedData, value = 0, txType = 'other')
         value: value,
         nonce: nonce,
         maxFeePerGas: gasPrice,
-        maxPriorityFeePerGas: web3.utils.toHex(web3.utils.toWei('3', 'gwei')),
+        maxPriorityFeePerGas: web3Utils.toHex(web3Utils.toWei('3', 'gwei')),
         gas: gasLimit,
         data: encodedData
       };
@@ -213,14 +267,12 @@ async function generateTransaction(to, encodedData, value = 0, txType = 'other')
     }
   }
 
-  if (shouldPromptConfirmation) {
-    await promptConfirmation();
-  }
+  if (shouldPromptConfirmation) await promptConfirmation();
 
   const tx = txoptions();
-  const signed = await web3.eth.accounts.signTransaction(tx, PRIVATE_KEY);
+  const signed = await web3Instance.accounts.signTransaction(tx, privateKey);
 
-  if (!doNotSubmitTx) {
+  if (globals.shouldSubmitTx) {
     await submitTransaction(signed.rawTransaction);
   } else {
     console.log('\n=============Raw TX=================', '\n');
@@ -237,7 +289,7 @@ async function generateTransaction(to, encodedData, value = 0, txType = 'other')
  * Create deposit object from secret and nullifier
  */
 function createDeposit({ nullifier, secret }) {
-  const deposit = { nullifier, secret };
+  let deposit = { nullifier, secret };
   deposit.preimage = Buffer.concat([deposit.nullifier.leInt2Buff(31), deposit.secret.leInt2Buff(31)]);
   deposit.commitment = pedersenHash(deposit.preimage);
   deposit.commitmentHex = toHex(deposit.commitment);
@@ -248,7 +300,7 @@ function createDeposit({ nullifier, secret }) {
 
 async function backupNote({ currency, amount, netId, note, noteString }) {
   try {
-    await fs.writeFileSync(`./backup-tornado-${currency}-${amount}-${netId}-${note.slice(0, 10)}.txt`, noteString, 'utf8');
+    fs.writeFileSync(`./backup-tornado-${currency}-${amount}-${netId}-${note.slice(0, 10)}.txt`, noteString, 'utf8');
     console.log('Backed up deposit note as', `./backup-tornado-${currency}-${amount}-${netId}-${note.slice(0, 10)}.txt`);
   } catch (e) {
     throw new Error('Writing backup note failed:', e);
@@ -257,7 +309,7 @@ async function backupNote({ currency, amount, netId, note, noteString }) {
 
 async function backupInvoice({ currency, amount, netId, commitmentNote, invoiceString }) {
   try {
-    await fs.writeFileSync(
+    fs.writeFileSync(
       `./backup-tornadoInvoice-${currency}-${amount}-${netId}-${commitmentNote.slice(0, 10)}.txt`,
       invoiceString,
       'utf8'
@@ -301,7 +353,10 @@ async function createInvoice({ currency, amount, chainId }) {
  * @param amount Deposit amount
  */
 async function deposit({ currency, amount, commitmentNote }) {
-  assert(senderAccount != null, 'Error! PRIVATE_KEY not found. Please provide PRIVATE_KEY in .env file if you deposit');
+  currency = currency.toLowerCase();
+
+  const  { signerAddress, tornadoProxyAddress, tornadoInstanceAddress, tornadoProxyContract, instanceTokenAddress, tornadoTokenInstanceContract, netSymbol, netId } = globals;
+  assert(signerAddress != null, 'Error! Private key not found. Please provide PRIVATE_KEY in .env file or as command argument, if you deposit');
   let commitment, noteString;
   if (!commitmentNote) {
     console.log('Creating new random deposit note');
@@ -319,35 +374,31 @@ async function deposit({ currency, amount, commitmentNote }) {
     commitment = toHex(commitmentNote);
   }
   if (currency === netSymbol.toLowerCase()) {
-    await printETHBalance({ address: tornadoContract._address, name: 'Tornado contract' });
-    await printETHBalance({ address: senderAccount, name: 'Sender account' });
-    const value = isTestRPC ? ETH_AMOUNT : fromDecimals({ amount, decimals: 18 });
+    await printETHBalance({ address: tornadoInstanceAddress, name: 'Tornado contract' });
+    await printETHBalance({ address: signerAddress, name: 'Sender account' });
+    const value = fromDecimals({ amount, decimals: 18 });
     console.log('Submitting deposit transaction');
-    await generateTransaction(tornadoProxyAddress, tornado.methods.deposit(tornadoInstance, commitment, []).encodeABI(), value);
-    await printETHBalance({ address: tornadoContract._address, name: 'Tornado contract' });
-    await printETHBalance({ address: senderAccount, name: 'Sender account' });
+    await generateTransaction(tornadoProxyAddress, tornadoProxyContract.methods.deposit(tornadoInstanceAddress, commitment, []).encodeABI(), value);
+    await printETHBalance({ address: tornadoInstanceAddress, name: 'Tornado contract' });
+    await printETHBalance({ address: signerAddress, name: 'Sender account' });
   } else {
     // a token
-    await printERC20Balance({ address: tornadoContract._address, name: 'Tornado contract' });
-    await printERC20Balance({ address: senderAccount, name: 'Sender account' });
-    const decimals = isTestRPC ? 18 : config.deployments[`netId${netId}`]['tokens'][currency].decimals;
-    const tokenAmount = isTestRPC ? TOKEN_AMOUNT : fromDecimals({ amount, decimals });
-    if (isTestRPC) {
-      console.log('Minting some test tokens to deposit');
-      await generateTransaction(erc20Address, erc20.methods.mint(senderAccount, tokenAmount).encodeABI());
-    }
+    await printERC20Balance({ address: tornadoInstanceAddress, name: 'Tornado contract' });
+    await printERC20Balance({ address: signerAddress, name: 'Sender account' });
+    const decimals =  config.deployments[`netId${netId}`]['tokens'][currency].decimals;
+    const tokenAmount = fromDecimals({ amount, decimals });
 
-    const allowance = await erc20.methods.allowance(senderAccount, tornado._address).call({ from: senderAccount });
+    const allowance = await tornadoTokenInstanceContract.methods.allowance(signerAddress, tornadoProxyAddress).call({ from: signerAddress });
     console.log('Current allowance is', fromWei(allowance));
     if (toBN(allowance).lt(toBN(tokenAmount))) {
       console.log('Approving tokens for deposit');
-      await generateTransaction(erc20Address, erc20.methods.approve(tornado._address, tokenAmount).encodeABI());
+      await generateTransaction(instanceTokenAddress, tornadoTokenInstanceContract.methods.approve(tornadoProxyAddress, tokenAmount).encodeABI());
     }
 
     console.log('Submitting deposit transaction');
-    await generateTransaction(tornadoProxyAddress, tornado.methods.deposit(tornadoInstance, commitment, []).encodeABI());
-    await printERC20Balance({ address: tornadoContract._address, name: 'Tornado contract' });
-    await printERC20Balance({ address: senderAccount, name: 'Sender account' });
+    await generateTransaction(tornadoProxyAddress, tornadoProxyContract.methods.deposit(tornadoInstanceAddress, commitment, []).encodeABI());
+    await printERC20Balance({ address: tornadoInstanceAddress, name: 'Tornado contract' });
+    await printERC20Balance({ address: signerAddress, name: 'Sender account' });
   }
 
   if (!commitmentNote) {
@@ -372,6 +423,8 @@ async function deposit({ currency, amount, commitmentNote }) {
  * @return {Promise<MerkleProof>} Calculated valid merkle tree (proof)
  */
 async function generateMerkleProof(deposit, currency, amount) {
+  const { web3Instance, multiCallAddress, tornadoInstanceContract } = globals;
+
   // Get all deposit events from smart contract and assemble merkle tree from them
   const cachedEvents = await fetchEvents({ type: 'deposit', currency, amount });
   const { tree, leaves, root } = computeDepositEventsTree(cachedEvents);
@@ -379,16 +432,16 @@ async function generateMerkleProof(deposit, currency, amount) {
   // Validate that merkle tree is valid, deposit data is correct and note not spent.
   const leafIndex = leaves.findIndex((commitment) => toBN(deposit.commitmentHex).toString(10) === commitment);
   let isValidRoot, isSpent;
-  if (!isTestRPC && !multiCall) {
+  if (!multiCallAddress) {
     const callContract = await useMultiCall([
-      [tornadoContract._address, tornadoContract.methods.isKnownRoot(toHex(root)).encodeABI()],
-      [tornadoContract._address, tornadoContract.methods.isSpent(toHex(deposit.nullifierHash)).encodeABI()]
+      [tornadoInstanceContract._address, tornadoInstanceContract.methods.isKnownRoot(toHex(root)).encodeABI()],
+      [tornadoInstanceContract._address, tornadoInstanceContract.methods.isSpent(toHex(deposit.nullifierHash)).encodeABI()]
     ]);
-    isValidRoot = web3.eth.abi.decodeParameter('bool', callContract[0]);
-    isSpent = web3.eth.abi.decodeParameter('bool', callContract[1]);
+    isValidRoot = web3Instance.abi.decodeParameter('bool', callContract[0]);
+    isSpent = web3Instance.abi.decodeParameter('bool', callContract[1]);
   } else {
-    isValidRoot = await tornadoContract.methods.isKnownRoot(toHex(root)).call();
-    isSpent = await tornadoContract.methods.isSpent(toHex(deposit.nullifierHash)).call();
+    isValidRoot = await tornadoInstanceContract.methods.isKnownRoot(toHex(root)).call();
+    isSpent = await tornadoInstanceContract.methods.isSpent(toHex(deposit.nullifierHash)).call();
   }
   assert(isValidRoot === true, 'Merkle tree is corrupted');
   assert(isSpent === false, 'The note is already spent');
@@ -440,6 +493,10 @@ async function generateProof({ deposit, currency, amount, recipient, relayerAddr
 
   console.log('Generating SNARK proof');
   console.time('Proof time');
+  // groth16 initialises a lot of Promises that will never be resolved, that's why we need to use process.exit to terminate the CLI
+  const groth16 = await buildGroth16();
+  const circuit = require('./circuits/tornado.json');
+  const provingKey = fs.readFileSync('./circuits/tornadoProvingKey.bin').buffer;
   const proofData = await websnarkUtils.genWitnessAndProve(groth16, input, circuit, provingKey);
   const { proof } = websnarkUtils.toSolidityInput(proofData);
   console.timeEnd('Proof time');
@@ -462,7 +519,7 @@ async function generateProof({ deposit, currency, amount, recipient, relayerAddr
  * @param recipient Recipient address
  */
 async function withdraw({ deposit, currency, amount, recipient, relayerURL, refund, privateKey }) {
-  let options = {timeout: 5000};
+  const { web3Instance, signerAddress, tornadoProxyAddress, requestOptions, feeOracle, tornadoInstanceAddress, tornadoProxyContract, netSymbol, netId, shouldPromptConfirmation } = globals;
   if (currency === netSymbol.toLowerCase() && refund && refund !== '0') {
     throw new Error('The ETH purchase is supposed to be 0 for ETH withdrawals');
   }
@@ -470,19 +527,31 @@ async function withdraw({ deposit, currency, amount, recipient, relayerURL, refu
   if (!isNaN(Number(refund))) refund = toWei(refund, 'ether');
   else refund = toBN(await feeOracle.fetchRefundInETH(currency.toLowerCase()));
 
-  if (!web3.utils.isAddress(recipient)) {
+  if (!web3Utils.isAddress(recipient)) {
     throw new Error('Recipient address is not valid');
   }
 
-  if (privateKey || process.env.PRIVATE_KEY) {
+  const depositInfo = await loadDepositData({ amount, currency, deposit });
+  const allDeposits = loadCachedEvents({ type: "deposit", currency, amount });
+  if ((depositInfo.leafIndex > allDeposits[allDeposits.length - 1].leafIndex - 10) && allDeposits.length > 10){
+    console.log("\nWARNING: you're trying to withdraw your deposit too early, there are not enough subsequent deposits to ensure good anonymity level. Read: https://docs.tornado.ws/general/guides/opsec.html");
+    if (shouldPromptConfirmation) await promptConfirmation("Continue withdrawal with risks to anonymity? [Y/n]: ")
+  }
+  const withdrawInfo = await loadWithdrawalData({ amount, currency, deposit });
+  if(withdrawInfo) {
+    console.error("\nError: note has already been withdrawn. Use `compliance` command to check deposit and withdrawal info.\n");
+    process.exit(1);
+  }
+
+  if (privateKey || globals.privateKey) {
     // using private key
 
     // check if the address of recepient matches with the account of provided private key from environment to prevent accidental use of deposit address for withdrawal transaction.
     assert(
-      recipient.toLowerCase() == senderAccount.toLowerCase(),
+      recipient.toLowerCase() == signerAddress.toLowerCase(),
       'Withdrawal recepient mismatches with the account of provided private key from environment file'
     );
-    const checkBalance = await web3.eth.getBalance(senderAccount);
+    const checkBalance = await web3Instance.getBalance(signerAddress);
     assert(checkBalance !== 0, 'You have 0 balance, make sure to fund account by withdrawing from tornado using relayer first');
 
     const { proof, args } = await generateProof({ deposit, currency, amount, recipient, refund });
@@ -490,24 +559,17 @@ async function withdraw({ deposit, currency, amount, recipient, relayerURL, refu
     console.log('Submitting withdraw transaction');
     await generateTransaction(
       tornadoProxyAddress,
-      tornado.methods.withdraw(tornadoInstance, proof, ...args).encodeABI(),
+      tornadoProxyContract.methods.withdraw(tornadoInstanceAddress, proof, ...args).encodeABI(),
       toBN(args[5]),
       'user_withdrawal'
     );
   }
   else {
-    if (torPort) 
-      options = {
-        ...options,
-        httpsAgent: new SocksProxyAgent('socks5h://127.0.0.1:' + torPort),
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; rv:91.0) Gecko/20100101 Firefox/91.0' }
-      };
-
     let relayerInfo;
     if (relayerURL) {
       try {
         relayerURL = new URL(relayerURL).origin;
-        res = await axios.get(relayerURL + '/status', options);
+        res = await axios.get(relayerURL + '/status', requestOptions);
         relayerInfo = res.data;
       } catch (err) {
         console.error(err);
@@ -525,10 +587,10 @@ async function withdraw({ deposit, currency, amount, recipient, relayerURL, refu
  
 
     const { rewardAccount, netId: relayerNetId, ethPrices, tornadoServiceFee } = relayerInfo;
-    assert(relayerNetId === (await web3.eth.net.getId()) || relayerNetId === '*', 'This relay is for different network');
+    assert(relayerNetId === (await web3Instance.net.getId()) || relayerNetId === '*', 'This relay is for different network');
     console.log('Relay address:', rewardAccount);
 
-    const decimals = isTestRPC ? 18 : config.deployments[`netId${netId}`]['tokens'][currency].decimals;
+    const decimals = config.deployments[`netId${netId}`]['tokens'][currency].decimals;
 
     const merkleWithdrawalProof = await generateMerkleProof(deposit, currency, amount);
 
@@ -549,7 +611,7 @@ async function withdraw({ deposit, currency, amount, recipient, relayerURL, refu
     const relayerFee = feeOracle.calculateRelayerFeeInWei(tornadoServiceFee, amount, decimals);
     const { proof: dummyProof, args: dummyArgs } = await calculateDataForRelayer(relayerFee);
 
-    const withdrawalTxCalldata = tornado.methods.withdraw(tornadoProxyAddress, dummyProof, ...dummyArgs);
+    const withdrawalTxCalldata = tornadoProxyContract.methods.withdraw(tornadoProxyAddress, dummyProof, ...dummyArgs);
     const incompleteWithdrawalTx = {
       to: tornadoProxyAddress,
       data: withdrawalTxCalldata,
@@ -583,24 +645,22 @@ async function withdraw({ deposit, currency, amount, recipient, relayerURL, refu
     );
     /** -------------------- **/
 
-    if (shouldPromptConfirmation) {
-      await promptConfirmation();
-    }
+    if (globals.shouldPromptConfirmation) await promptConfirmation();
 
     try {
       const response = await axios.post(
         relayerURL + '/v1/tornadoWithdraw',
         {
-          contract: tornadoInstance,
+          contract: tornadoInstanceAddress,
           proof,
           args
         },
-        options
+        requestOptions
       );
 
       const { id } = response.data;
 
-      const result = await getStatus(id, relayerURL, options);
+      const result = await getStatus(id, relayerURL, requestOptions);
       console.log('STATUS', result);
     } catch (e) {
       console.error(e.message);
@@ -622,25 +682,26 @@ async function withdraw({ deposit, currency, amount, recipient, relayerURL, refu
  * @param tokenAddress ERC20 token address
  */
 async function send({ address, amount, tokenAddress }) {
+  const { web3Instance, signerAddress, feeOracle, multiCallAddress, netSymbol, netId } = globals;
+
   // using private key
-  assert(senderAccount != null, 'Error! PRIVATE_KEY not found. Please provide PRIVATE_KEY in .env file if you send');
+  assert(signerAddress != null, 'Error! Private key not found. Please provide PRIVATE_KEY in .env file if you send');
   if (tokenAddress) {
-    const erc20ContractJson = require('./build/contracts/ERC20Mock.json');
-    erc20 = new web3.eth.Contract(erc20ContractJson.abi, tokenAddress);
+    const erc20Contract = new web3Instance.Contract(erc20Abi, tokenAddress);
     let tokenBalance, tokenDecimals, tokenSymbol;
-    if (!isTestRPC && !multiCall) {
+    if (multiCallAddress) {
       const callToken = await useMultiCall([
-        [tokenAddress, erc20.methods.balanceOf(senderAccount).encodeABI()],
-        [tokenAddress, erc20.methods.decimals().encodeABI()],
-        [tokenAddress, erc20.methods.symbol().encodeABI()]
+        [tokenAddress, erc20Contract.methods.balanceOf(signerAddress).encodeABI()],
+        [tokenAddress, erc20Contract.methods.decimals().encodeABI()],
+        [tokenAddress, erc20Contract.methods.symbol().encodeABI()]
       ]);
       tokenBalance = new BigNumber(callToken[0]);
       tokenDecimals = parseInt(callToken[1]);
-      tokenSymbol = web3.eth.abi.decodeParameter('string', callToken[2]);
+      tokenSymbol = web3Instance.abi.decodeParameter('string', callToken[2]);
     } else {
-      tokenBalance = new BigNumber(await erc20.methods.balanceOf(senderAccount).call());
-      tokenDecimals = await erc20.methods.decimals().call();
-      tokenSymbol = await erc20.methods.symbol().call();
+      tokenBalance = new BigNumber(await erc20Contract.methods.balanceOf(signerAddress).call());
+      tokenDecimals = await erc20Contract.methods.decimals().call();
+      tokenSymbol = await erc20Contract.methods.symbol().call();
     }
     const toSend = new BigNumber(amount).times(BigNumber(10).pow(tokenDecimals));
     if (tokenBalance.lt(toSend)) {
@@ -652,11 +713,11 @@ async function send({ address, amount, tokenAddress }) {
       );
       process.exit(1);
     }
-    const encodeTransfer = erc20.methods.transfer(address, toSend).encodeABI();
+    const encodeTransfer = erc20Contract.methods.transfer(address, toSend).encodeABI();
     await generateTransaction(tokenAddress, encodeTransfer, 0, 'send');
     console.log('Sent', amount, tokenSymbol, 'to', address);
   } else {
-    const balance = new BigNumber(await web3.eth.getBalance(senderAccount));
+    const balance = new BigNumber(await web3Instance.getBalance(signerAddress));
     assert(balance.toNumber() !== 0, "You have 0 balance, can't send transaction");
     let toSend = new BigNumber(0);
     if (amount) {
@@ -808,7 +869,7 @@ function toDecimals(value, decimals, fixed) {
 
 // List fetched from https://github.com/ethereum-lists/chains/blob/master/_data/chains
 function getExplorerLink() {
-  switch (netId) {
+  switch (globals.netId) {
     case 56:
       return 'bscscan.com';
     case 100:
@@ -832,9 +893,7 @@ function getExplorerLink() {
 
 // List fetched from https://github.com/trustwallet/assets/tree/master/blockchains
 function getCurrentNetworkName() {
-  switch (netId) {
-    case 1:
-      return 'Ethereum';
+  switch (globals.netId) {
     case 56:
       return 'BinanceSmartChain';
     case 100:
@@ -845,19 +904,22 @@ function getCurrentNetworkName() {
       return 'Arbitrum';
     case 43114:
       return 'Avalanche';
-    case 5:
-      return 'Goerli';
     case 42:
       return 'Kovan';
     case 10:
       return 'Optimism';
     default:
-      return 'testRPC';
+      return 'Ethereum';
   }
 }
 
-function getCurrentNetworkSymbol() {
-  switch (netId) {
+/**
+ * Get native currency symbol for selected chain
+ * @param {number | string} chainId 
+ * @returns {string} 
+ */
+function getCurrentNetworkSymbol(chainId) {
+  switch (Number(chainId)) {
     case 56:
       return 'BNB';
     case 100:
@@ -877,47 +939,112 @@ function getCurrentNetworkSymbol() {
  * @param attempts
  * @param delay
  */
-function waitForTxReceipt({ txHash, attempts = 60, delay = 1000 }) {
-  return new Promise((resolve, reject) => {
-    const checkForTx = async (txHash, retryAttempt = 0) => {
-      const result = await web3.eth.getTransactionReceipt(txHash);
-      if (!result || !result.blockNumber) {
-        if (retryAttempt <= attempts) {
-          setTimeout(() => checkForTx(txHash, retryAttempt + 1), delay);
-        } else {
-          reject(new Error('tx was not mined'));
-        }
-      } else {
-        resolve(result);
-      }
-    };
-    checkForTx(txHash);
-  });
-}
+async function waitForTxReceipt({ txHash, attempts = 60, delay = 1000 }) {
+  let retryAttempt = 0;
+  while(retryAttempt < attempts){
+    const result = await globals.web3Instance.getTransactionReceipt(txHash);
+    if(!result?.blockNumber){
+      retryAttempt++;
+      await sleep(delay);
+      continue;
+    }
+    return result;
+  }
 
-function initJson(file) {
-  return new Promise((resolve, reject) => {
-    fs.readFile(file, 'utf8', (error, data) => {
-      if (error) {
-        resolve([]);
-      }
-      try {
-        resolve(JSON.parse(data));
-      } catch (error) {
-        resolve([]);
-      }
-    });
-  });
+  throw new Error(`Cannot get transaction receipt in ${attempts} retry attempts`);
 }
 
 /**
- * @todo Upgrade function to check multiple default RPC and select the working one
  * Select one of default RPCs that works correctly
- * @param {number | string} chainId 
+ * @param {number | string} chainId
+ * @param {EventType} eventType Possible type of events in Tornado: deposit, withdrawal or fetch relayers
+ * @param {boolean} [isSubgraphAvailable=false] If subgraph for required user action is already available, we can lower requirements for RPC (for example, 
+ * if we can fetch all deposit events from subgraph, we shouldn't require archive node)
  * @returns {Promise<string>} Full RPC link
  */
-async function selectDefaultRpc(chainId){
-  return config.deployments[`netId${chainId}`].defaultRpc;
+async function selectDefaultRpc(chainId, eventType, isSubgraphAvailable = false){
+  const candidates = config.deployments[`netId${chainId}`].defaultRpcs;
+
+  for(const candidate of candidates){
+    const localWeb3 = await createWeb3Instance(candidate);
+    
+    try{
+      if (!(await localWeb3.net.isListening())) throw new Error('Cannot connect to websocket provider');
+
+      if (eventType === "relayer"){
+        const relayerRegistryContract = new localWeb3.Contract(relayerRegistryAbi, relayerRegistryAddress);
+        const registeredRelayers = loadCachedEvents({type: "relayer"});
+
+        if(registeredRelayers.length > 0){
+          const relayerAggregatorContract = new localWeb3.Contract(relayerAggregatorAbi, relayerAggregatorAddress);
+          const relayerNameHashes = registeredRelayers.map(r => r.ensHash);
+          // Here it checks RPC returndata size limit: when getRelayer function aggregates onchain data for all relayers, returndata size will be big
+          await relayerAggregatorContract.methods.relayersData(relayerNameHashes, relayerSubdomains).call();
+        }
+
+       const lastBlock = await localWeb3.getBlockNumber();
+       const lastCachedBlock = registeredRelayers.length > 0 ? registeredRelayers[registeredRelayers.length - 1].blockNumber : relayerRegistryDeployedBlockNumber;
+       const fromBlock = isSubgraphAvailable ? lastBlock - 1000 : lastCachedBlock;
+       const toBlock = isSubgraphAvailable ? lastBlock : lastCachedBlock + 1000;
+       await relayerRegistryContract.getPastEvents("RelayerRegistered", { fromBlock, toBlock });
+      }
+      else if (eventType === "withdrawal") {
+        const oldTransactionHash = config.deployments[`netId${chainId}`].firstDeploymentTransaction;
+        const testReceipt = await localWeb3.getTransactionReceipt(oldTransactionHash);
+
+        const netSymbol = getCurrentNetworkSymbol(chainId).toLowerCase();
+        const [tornadoInstanceAmount, tornadoInstanceAddress] = Object.entries(config.deployments[`netId${chainId}`]['tokens'][netSymbol].instanceAddress)[0];;
+        const instanceDeployedBlockNumber = config.deployments[`netId${chainId}`]['tokens'][netSymbol].deployedBlockNumber[tornadoInstanceAmount];
+        const tornadoInstanceContract = new localWeb3.Contract(tornadoInstanceAbi, tornadoInstanceAddress);
+
+        if (!testReceipt) throw new Error("RPC cannot get receipt of old transaction");
+        const lastBlock = await localWeb3.getBlockNumber();
+        const fromBlock = isSubgraphAvailable ? lastBlock - 1000 : instanceDeployedBlockNumber;
+        const toBlock = isSubgraphAvailable ? lastBlock : instanceDeployedBlockNumber + 1000;
+        await tornadoInstanceContract.getPastEvents("Deposit", { fromBlock, toBlock });
+      }
+      else await localWeb3.getBlockNumber();
+      
+      console.log("Selected RPC: " + candidate);
+      return candidate;
+    } catch(e){
+      console.log(e)
+    }
+  }
+
+  throw new Error("All default RPC cannot be used, provide a working one");
+}
+
+/**
+ * Select one of default subgraphs that works correctly
+ * @param {number | string } chainId
+ * @param {EventType} eventType Possible type of events in Tornado: deposit, withdrawal or fetch relayers
+ * @returns {Promise<string>} Full subgraph link
+ */
+async function selectDefaultGraph(chainId, eventType){
+  let candidates = config.deployments[`netId${chainId}`].subgraphs;
+  if (eventType === "relayer"){
+    if (chainId != 1) throw new Error("Relayer subgraph is available only for mainnet");
+    candidates = config.deployments[`netId${chainId}`].relayerSubgraphs;
+    query = '{ relayers(first: 10) { address, ensName, ensHash, blockRegistration } }'
+  } 
+  else if (eventType === "deposit")  query = `{ deposits(first: 1, orderBy: timestamp) { blockNumber, index } }`;
+  else query = `{ withdrawals(first: 1, orderBy: timestamp) { timestamp } }`
+
+  for(const candidate of candidates) {
+    try{
+      const response = await axios.post(candidate, {query}, globals.requestOptions);
+      const result = response.data.data[`${eventType}s`];
+      if (!result) throw new Error("Invalid response from subgraph");
+      console.log(`Selected subgraph for ${eventType}s - ${candidate}`);
+      return candidate;
+    } catch(e){
+      console.log(e)
+    }
+  }
+  
+  console.log(`There is no available subgraph for ${eventType}s`);
+  return;
 }
 
 /**
@@ -926,37 +1053,11 @@ async function selectDefaultRpc(chainId){
  * @returns {Promise<Array<Object>>} List of available relayers
  */
 async function getRelayers(chainId){
-  console.log("Fetching relayers...")
-  let localWeb3 = web3;
-  if (netId != 1) {
-    mainnetRpc = await selectDefaultRpc(1);
-    localWeb3 = await createWeb3Instance(mainnetRpc, torPort)
-  }
+  console.log("Fetching relayers...");
 
   const MIN_STAKE_LISTED_BALANCE = '0X1B1AE4D6E2EF500000'; // 500 TORN
-  const aggregatorContract = '0xE8F47A78A6D52D317D0D2FFFac56739fE14D1b49';
-  const AggregatorABI = require('./abis/Aggregator.abi');
-  const aggregator = new localWeb3.eth.Contract(AggregatorABI, aggregatorContract);
+  const aggregator = new globals.relayerWeb3Instance.Contract(relayerAggregatorAbi, relayerAggregatorAddress);
   const ensSubdomainKey = config.deployments[`netId${chainId}`].ensSubdomainKey;
-  const relayerGraphApi = config.deployments["netId1"].relayerSubgraph;
-  const relayerSubdomains = Object.values(config.deployments).map(({ ensSubdomainKey }) => ensSubdomainKey)
-
-  let options;
-  if (torPort) {
-    options = {
-      httpsAgent: new SocksProxyAgent('socks5h://127.0.0.1:' + torPort),
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; rv:91.0) Gecko/20100101 Firefox/91.0' }
-    };
-  }
-
-  async function fetchGraphRelayers() {
-    try{
-      const res = await axios.post(relayerGraphApi, { 'query': '{ relayers(first: 1000) {\n    id\n    address\n    ensName\n    ensHash\n  }\n}' }, options);
-      return res.data.data.relayers;
-    } catch(e){
-      throw new Error("Relayers subgraph API not responding");
-    }
-  }
   
   function filterRelayers(acc, curr, ensSubdomainKey, relayer) {
     const subdomainIndex = relayerSubdomains.indexOf(ensSubdomainKey);
@@ -986,7 +1087,7 @@ async function getRelayers(chainId){
   }
   
   async function getValidRelayers(relayers, ensSubdomainKey) {
-    const relayerNameHashes = relayers.map((r) => namehash.hash(r.ensName));
+    const relayerNameHashes = relayers.map((r) => r.ensHash);
     const relayersData = await aggregator.methods.relayersData(relayerNameHashes, relayerSubdomains).call();
     const validRelayers = relayersData.reduce(
       (acc, curr, index) => filterRelayers(acc, curr, ensSubdomainKey, relayers[index]),
@@ -999,7 +1100,7 @@ async function getRelayers(chainId){
     let statuses = [];
     for (const relayer of relayers) {
       try {
-        const res = await axios.get(`https://${relayer.hostname}/status`, Object.assign({timeout: 5000}, options));
+        const res = await axios.get(`https://${relayer.hostname}/status`, globals.requestOptions);
         const statusData = res.data;
         if (statusData.rewardAccount && statusData.health.status == 'true') {
           statuses.push({
@@ -1015,8 +1116,10 @@ async function getRelayers(chainId){
     return statuses;
   }
 
-  const registeredRelayers = await fetchGraphRelayers();
-  const validRelayers = await getValidRelayers(registeredRelayers, ensSubdomainKey);
+  const registeredRelayers = await fetchEvents({type: "relayer"});
+  // Some relayers can be unregistered and then registrered again
+  const deduplicatedRelayers = registeredRelayers.filter((relayer, index, relayers) => index === relayers.findIndex(r => relayer.ensName === r.ensName));
+  const validRelayers = await getValidRelayers(deduplicatedRelayers, ensSubdomainKey);
   const availableRelayersData = await getAvailableRelayersData(validRelayers);
 
   console.log(`Found ${availableRelayersData.length} available relayers`)
@@ -1056,7 +1159,7 @@ function pickWeightedRandomRelayer(relayers) {
   
   let minFee, maxFee
 
-  if (netId != 1) {
+  if (globals.netId != 1) {
     minFee = 0.01
     maxFee = 0.3
   }
@@ -1072,45 +1175,86 @@ function pickWeightedRandomRelayer(relayers) {
   return relayers[weightRandomIndex]
 }
 
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 /**
- * Erase all zero events from events tree array
- * @param events Events tree array
+ * Send post request several times until successful response (200-300 https statuses) until the allowed number of attempts is used up
+ * @param {string} url Post requets url
+ * @param {Object} data Post request data
+ * @param {RequestOptions} requestOptions Post request connection options (timeout, proxy)
+ * @param {number} retryAttempts Retry attempts count, it limits the maximum number of requests
+ * @param {number} waitingTimeIncrease In milliseconds. The waiting time is increased before each new attempt, (this value) * (current retry attempt number) 
+ * @returns {Promise<any>} Axios reonse
  */
-function filterZeroEvents(events) {
-  return events.filter((event) => event.transactionHash !== null);
-}
-
-function loadCachedEvents({ type, currency, amount }) {
-  try {
-    const events = require(`./cache/${netName.toLowerCase()}/${type}s_${currency.toLowerCase()}_${amount}.json`);
-
-    if (!events || events.length === 0) throw new Error("Invalid cached events file")
-      
-    return {
-      events: filterZeroEvents(events),
-      lastBlock: events[events.length - 1].blockNumber
-    };
-  } catch (err) {
-    console.log('Error fetching cached files, syncing from block', deployedBlockNumber);
-    return {
-      events: [],
-      lastBlock: deployedBlockNumber
-    };
+async function retryPostRequest(url, data, requestOptions, retryAttempts, waitingTimeIncrease = 2000) {
+  let retryAttempt = 0;
+  while (1){
+    await sleep(waitingTimeIncrease * retryAttempt);
+    try{
+      return await axios.post(url, data, requestOptions);
+    } catch(e){
+      if(retryAttempt === retryAttempts) throw e;
+      retryAttempt++;
+    }
   }
 }
 
-async function fetchEvents({ type, currency, amount, filterEvents }) {
+/**
+ * Get file path for cached events flile
+ * @param {EventType} eventType Event type
+ * @param {string} currency Tornado instance currency symbol
+ * @param {number | string} amount Tornado instance currency amount
+ * @returns {string} Path to cache file
+ */
+function getEventsFilePath(eventType, currency, amount){
+  return eventType === "relayer" ? "./cache/relayer/register.json" : `./cache/${globals.netName.toLowerCase()}/${eventType}s_${currency.toLowerCase()}_${amount}.json`;
+}
+
+/**
+ * Load events from cache file
+ * @param {Object} args
+ * @param {EventType} args.type Event type
+ * @param {string} args.currency Tornado instance currency symbol
+ * @param {string | number} amount Tornado instance currency amount
+ * @returns {Array} Cached events
+ */
+function loadCachedEvents({ type, currency, amount }) {
+  try {
+    const events = JSON.parse(fs.readFileSync(getEventsFilePath(type, currency, amount)));
+
+    if (!events || events.length === 0) throw new Error("Invalid cached events file")
+    return events;
+  } catch (err) {
+    console.log(`Error fetching cached ${type} events from file`);
+    return [];
+  }
+}
+
+/**
+ * Update cache for events of selected type (currency and amount also, if applicable) to actual blockchain state
+ * @param {Object} args 
+ * @param {EventType} args.type Events type
+ * @param {string} [args.currency] Currency to select Tornado pool instance from which it should fetch events (for deposits and withdrawals)
+ * @param {number} [args.amount] Amount to select Tornado pool instance from which it should fetch events (for deposits and withdrawals)
+ * @returns {Promise<Array<Object>>} All events (cached and newly fetched)
+ */
+async function fetchEvents({ type, currency, amount }) {
+  if(currency) currency = currency.toLowerCase();
   if (type === 'withdraw') {
     type = 'withdrawal';
   }
-  if (filterEvents === undefined) filterEvents = true;
+
+  const { netName, netId, instanceDeployedBlockNumber, useOnlyRpc, tornadoInstanceContract } = globals;
+  const web3Instance = type === 'relayer' ? globals.relayerWeb3Instance : globals.web3Instance;
+  const subgraph = useOnlyRpc ? null : await selectDefaultGraph(type === 'relayer' ? 1 : netId, type);
 
   const cachedEvents = loadCachedEvents({ type, currency, amount });
-  const startBlock = cachedEvents.lastBlock + 1;
+  const startBlock = cachedEvents.length ? cachedEvents[cachedEvents.length - 1].blockNumber + 1 : (type === "relayer" ? relayerRegistryDeployedBlockNumber : instanceDeployedBlockNumber);
 
-  console.log('Loaded cached', amount, currency.toUpperCase(), type, 'events for', startBlock, 'block');
-  console.log('Fetching', amount, currency.toUpperCase(), type, 'events for', netName, 'network');
+  if(type !== "relayer"){
+    console.log('Loaded cached', amount, currency.toUpperCase(), type, 'events for', startBlock, 'block');
+    console.log('Fetching', amount, currency.toUpperCase(), type, 'events for', netName, 'network');
+  }
 
   /**
    * Updates local events cache file for one Tornado cash instance, for example, deposit events for 1 ETH pool
@@ -1118,106 +1262,45 @@ async function fetchEvents({ type, currency, amount, filterEvents }) {
    */
   async function updateCache(fetchedEvents) {
     if (type === 'deposit') fetchedEvents.sort((firstLeaf, secondLeaf) => firstLeaf.leafIndex - secondLeaf.leafIndex);
+    if (type === 'relayer') fetchedEvents.sort((first, second) => first.blockRegistration - second.blockRegistration);
 
     try {
-      const fileName = `./cache/${netName.toLowerCase()}/${type}s_${currency.toLowerCase()}_${amount}.json`;
-      const savedEvents = await initJson(fileName);
-      const cachedEvents = filterZeroEvents(savedEvents);
-      // Because we fetch some events twice from graph, and we assume that cached events are sorted, we can erase duplicated events simply from the start of fetched array
-      const deduplicatedFetchedEvents = fetchedEvents.slice(fetchedEvents.findIndex(event => event?.transactionHash === cachedEvents[cachedEvents.length - 1]?.transactionHash) + 1)
-      const events = cachedEvents.concat(deduplicatedFetchedEvents);
-      fs.writeFileSync(fileName, JSON.stringify(events, null, 2), 'utf8');
+      const cachedEvents = loadCachedEvents({type, currency, amount});
+      const events = cachedEvents.concat(fetchedEvents);
+      fs.writeFileSync(getEventsFilePath(type, currency, amount), JSON.stringify(events, null, 2), 'utf8');
     } catch (error) {
       console.log(error)
       throw new Error('Writing cache file failed:', error);
     }
   }
 
-  /**
-   * Adds an zero (empty) event to the end of the events list
-   * If tornado transactions on the selected currency/amount are rare and the last one was much earlier than the current block,
-   * it helps to quickly synchronize the events tree
-   * @param {number} blockNumber Latest block number on selected chain
-   */
-  async function addZeroEvent(blockNumber) {
-    const zeroEvent = { blockNumber, transactionHash: null };
-    await updateCache([zeroEvent]);
-
-    console.log('Added', amount, currency.toUpperCase(), type, 'zero event to block:', blockNumber);
-  }
-
   async function syncEvents() {
     try {
-      let targetBlock = await web3.eth.getBlockNumber();
-      let chunks = 1000;
+      const targetBlock = await web3Instance.getBlockNumber();
+      const chunks = 1000;
+      const contract = type === "relayer" ? new web3Instance.Contract(relayerRegistryAbi, relayerRegistryAddress) : tornadoInstanceContract;
+      const eventNameInContract = type === "relayer" ? "RelayerRegistered" : capitalizeFirstLetter(type);
       console.log('Querying latest events from RPC');
 
       for (let i = startBlock; i < targetBlock; i += chunks) {
-        let fetchedEvents = [];
+        let mapFunction;
+        if (type === "relayer") 
+          mapFunction = ({ blockNumber, returnValues: {relayer, relayerAddress, ensName} }) => ({blockNumber, ensHash: relayer, ensName, address: relayerAddress});
+        else if (type === "deposit")
+          mapFunction = ({ blockNumber, transactionHash, returnValues: { commitment, leafIndex, timestamp } }) => 
+            ({blockNumber, transactionHash, commitment, leafIndex: Number(leafIndex), timestamp: Number(timestamp)});
+        else mapFunction = ({ blockNumber, transactionHash, returnValues: {nullifierHash, to, fee} }) => ({blockNumber, transactionHash, nullifierHash, to, fee});
 
-        function mapDepositEvents() {
-          fetchedEvents = fetchedEvents.map(({ blockNumber, transactionHash, returnValues }) => {
-            const { commitment, leafIndex, timestamp } = returnValues;
-            return {
-              blockNumber,
-              transactionHash,
-              commitment,
-              leafIndex: Number(leafIndex),
-              timestamp
-            };
-          });
+        const finalBlock = Math.min(i + chunks - 1, targetBlock);
+        try{
+          const fetchedEvents = await contract.getPastEvents(eventNameInContract, {fromBlock: i, toBlock: finalBlock});
+          console.log('Fetched', type === "relayer" ? type : `${amount} ${currency.toUpperCase()} ${type}`, 'events to block:', finalBlock);
+          if(fetchedEvents.length === 0) continue;
+          await updateCache(fetchedEvents.map(mapFunction));
+        } catch(err){
+          console.error(`Failed fetching ${type} events from node on block ${i}: `, err)
+          process.exit(1);
         }
-
-        function mapWithdrawEvents() {
-          fetchedEvents = fetchedEvents.map(({ blockNumber, transactionHash, returnValues }) => {
-            const { nullifierHash, to, fee } = returnValues;
-            return {
-              blockNumber,
-              transactionHash,
-              nullifierHash,
-              to,
-              fee
-            };
-          });
-        }
-
-        function mapLatestEvents() {
-          if (type === 'deposit') {
-            mapDepositEvents();
-          } else {
-            mapWithdrawEvents();
-          }
-        }
-
-        async function fetchWeb3Events(i) {
-          let j;
-          if (i + chunks - 1 > targetBlock) {
-            j = targetBlock;
-          } else {
-            j = i + chunks - 1;
-          }
-          await tornadoContract
-            .getPastEvents(capitalizeFirstLetter(type), {
-              fromBlock: i,
-              toBlock: j
-            })
-            .then(
-              (r) => {
-                fetchedEvents = fetchedEvents.concat(r);
-                console.log('Fetched', amount, currency.toUpperCase(), type, 'events to block:', j);
-              },
-              (err) => {
-                console.error(i + ' failed fetching', type, 'events from node', err);
-                process.exit(1);
-              }
-            )
-            .catch(console.log);
-
-          mapLatestEvents();
-        }
-
-        await fetchWeb3Events(i);
-        await updateCache(fetchedEvents);
       }
     } catch (error) {
       console.log(error);
@@ -1226,121 +1309,53 @@ async function fetchEvents({ type, currency, amount, filterEvents }) {
   }
 
   async function syncGraphEvents() {
-    let options = {};
-    if (torPort) {
-      options = {
-        httpsAgent: new SocksProxyAgent('socks5h://127.0.0.1:' + torPort),
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; rv:91.0) Gecko/20100101 Firefox/91.0' }
-      };
-    }
 
-    async function queryLatestTimestamp() {
+    /**
+     * Query events from graph (1000 events for a time maximum)
+     * @param {number} blockNumber Block number in blockchain, from which it will fetch events
+     * @param {('' | 'gt')} filter If "_gt", it fetches 1000 events with blockNumber greater then provided, if empty, it fetches events only with provided blockNumber
+     * @returns {Promise<Array>}
+     */
+    async function queryFromGraph(blockNumber, filter = "_gt") {
       try {
-        const variables = {
-          currency: currency.toString().toLowerCase(),
-          amount: amount.toString().toLowerCase()
-        };
-        console.log(variables);
-        if (type === 'deposit') {
-          const query = {
-            query: `
-            query($currency: String, $amount: String){
-              deposits(first: 1, orderBy: timestamp, orderDirection: desc, where: {currency: $currency, amount: $amount}) {
-                timestamp
-              }
-            }
-            `,
-            variables
-          };
-          const querySubgraph = await axios.post(subgraph, query, options);
-          const queryResult = querySubgraph.data.data.deposits;
-          const result = queryResult[0].timestamp;
-          return Number(result);
-        } else {
-          const query = {
-            query: `
-            query($currency: String, $amount: String){
-              withdrawals(first: 1, orderBy: timestamp, orderDirection: desc, where: {currency: $currency, amount: $amount}) {
-                timestamp
-              }
-            }
-            `,
-            variables
-          };
-          const querySubgraph = await axios.post(subgraph, query, options);
-          const queryResult = querySubgraph.data.data.withdrawals;
-          const result = queryResult[0].timestamp;
-          return Number(result);
-        }
-      } catch (error) {
-        console.log(error);
-        console.error('Failed to fetch latest event from subgraph');
-      }
-    }
-
-    async function queryFromGraph(timestamp) {
-      try {
-        const variables = {
+        const variables = type === 'relayer' ? { blockRegistration: blockNumber } : {
           currency: currency.toString().toLowerCase(),
           amount: amount.toString().toLowerCase(),
-          timestamp: timestamp
+          blockNumber
         };
-        if (type === 'deposit') {
-          console.log(variables);
-          const query = {
-            query: `
-            query($currency: String, $amount: String, $timestamp: Int){
-              deposits(orderBy: timestamp, first: 1000, where: {currency: $currency, amount: $amount, timestamp_gt: $timestamp}) {
-                blockNumber
-                transactionHash
-                commitment
-                index
-                timestamp
+
+        let query, mapFunction;
+        if (type === 'relayer') {
+          query = `
+            query($blockRegistration: Int){
+              relayers(orderBy: blockRegistration, first: 1000, where: {blockRegistration${filter}: $blockRegistration}) {
+                address, ensName, ensHash, blockRegistration
               }
-            }
-            `,
-            variables
-          };
-          const querySubgraph = await axios.post(subgraph, query, options);
-          const queryResult = querySubgraph.data.data.deposits;
-          const mapResult = queryResult.map(({ blockNumber, transactionHash, commitment, index, timestamp }) => {
-            return {
-              blockNumber: Number(blockNumber),
-              transactionHash,
-              commitment,
-              leafIndex: Number(index),
-              timestamp: Number(timestamp)
-            };
-          });
-          return mapResult;
-        } else {
-          const query = {
-            query: `
-            query($currency: String, $amount: String, $timestamp: Int){
-              withdrawals(orderBy: timestamp, first: 1000, where: {currency: $currency, amount: $amount, timestamp_gt: $timestamp}) {
-                blockNumber
-                transactionHash
-                nullifier
-                to
-                fee
-              }
-            }
-            `,
-            variables
-          };
-          const querySubgraph = await axios.post(subgraph, query, options);
-          const queryResult = querySubgraph.data.data.withdrawals;
-          const mapResult = queryResult.map(({ blockNumber, transactionHash, nullifier, to, fee }) => {
-            return {
-              blockNumber: Number(blockNumber),
-              transactionHash,
-              nullifierHash: nullifier,
-              to,
-              fee
-            };
-          });
-          return mapResult;
+            }`;
+          mapFunction = ({blockRegistration, address, ensName, ensHash}) => ({address, ensHash, ensName, blockNumber: Number(blockRegistration)});
         }
+        else if (type === 'deposit') {
+          query = `
+            query($currency: String, $amount: String, $blockNumber: Int){
+              deposits(orderBy: blockNumber, first: 1000, where: {currency: $currency, amount: $amount, blockNumber${filter}: $blockNumber}) {
+                blockNumber, transactionHash, commitment, index
+              }
+            }`;
+          mapFunction = ({ blockNumber, transactionHash, commitment, index }) => ({blockNumber: Number(blockNumber), transactionHash, commitment, leafIndex: Number(index)});
+        } 
+        else if (type === "withdrawal") {
+          query =  `
+            query($currency: String, $amount: String, $blockNumber: Int){
+              withdrawals(orderBy: blockNumber, first: 1000, where: {currency: $currency, amount: $amount, blockNumber${filter}: $blockNumber}) {
+                blockNumber, transactionHash, nullifier, to, fee
+              }
+            }`;
+          mapFunction = ({ blockNumber, transactionHash, nullifier, to, fee }) => ({blockNumber: Number(blockNumber), transactionHash, nullifierHash: nullifier, to, fee});
+        }
+
+        const querySubgraph = await retryPostRequest(subgraph, {query, variables}, globals.requestOptions, 3);
+        const queryResult = querySubgraph.data.data[`${type}s`];
+        return queryResult.map(mapFunction);
       } catch (error) {
         console.error(error);
       }
@@ -1348,49 +1363,41 @@ async function fetchEvents({ type, currency, amount, filterEvents }) {
 
     async function fetchGraphEvents() {
       console.log('Querying latest events from subgraph');
-      const latestTimestamp = await queryLatestTimestamp();
-      if (latestTimestamp) {
-        const getCachedBlock = await web3.eth.getBlock(startBlock);
-        const cachedTimestamp = getCachedBlock.timestamp;
-        for (let i = cachedTimestamp; i < latestTimestamp; ) {
-          const result = await queryFromGraph(i - 1);
+      const latestBlock = await web3Instance.getBlockNumber();
+      try {
+        for (let i = startBlock; i < latestBlock; ) {
+          let result = await queryFromGraph(i);
           if (Object.keys(result).length === 0) break;
           const resultBlockNumber = result[result.length - 1].blockNumber;
-          const resultTimestamp = type === "deposit" ? result[result.length - 1].timestamp : (await web3.eth.getBlock(resultBlockNumber)).timestamp;
+          while(result.length > 0 && result[result.length - 1].blockNumber === resultBlockNumber) result.pop();
+          result = result.concat(await queryFromGraph(resultBlockNumber, ""));
           await updateCache(result);
-          i = resultTimestamp;
-          console.log('Fetched', amount, currency.toUpperCase(), type, 'events to block:', Number(resultBlockNumber));
+          i = resultBlockNumber;
+          console.log('Fetched', type === 'relayer' ? type :  `${amount} ${currency.toUpperCase()} ${type}`, 'events to block:', Number(resultBlockNumber));
         }
-      } else {
+      } catch {
         console.log('Fallback to web3 events');
         await syncEvents();
       }
     }
     await fetchGraphEvents();
   }
-  if (!privateRpc && subgraph && !isTestRPC) {
+  if (subgraph && !useOnlyRpc) {
     await syncGraphEvents();
   } else {
     await syncEvents();
   }
-  await addZeroEvent(await web3.eth.getBlockNumber());
 
-  async function loadUpdatedEvents() {
-    // Don't use loadCachedEvents function, because we need to check zero event block (to which block we updated)
-    const fileName = `./cache/${netName.toLowerCase()}/${type}s_${currency.toLowerCase()}_${amount}.json`;
-    const updatedEvents = await initJson(fileName);
-    const updatedBlock = updatedEvents[updatedEvents.length - 1].blockNumber;
-    console.log('Cache updated for Tornado', type, amount, currency, 'instance to block', updatedBlock, 'successfully');
-    console.log(`Total ${type}s:`, updatedEvents.length - 1);
-    return updatedEvents;
-  }
-  const events = await loadUpdatedEvents();
-  return filterEvents ? filterZeroEvents(events) : events;
+  const updatedEvents = loadCachedEvents({type, currency, amount})
+  const updatedBlock = updatedEvents[updatedEvents.length - 1].blockNumber;
+  console.log('Cache updated for Tornado', type === 'relayer' ? type : `${amount} ${currency.toUpperCase()} instance to block`, updatedBlock, 'successfully');
+  console.log(`Total ${type}s:`, updatedEvents.length - 1);
+  return updatedEvents;
 }
 
 /**
- * Parses Tornado.cash note
- * @param noteString the note
+ * Parses Tornado Cash note
+ * @param {string} noteString the note
  */
 function parseNote(noteString) {
   const noteRegex = /tornado-(?<currency>\w+)-(?<amount>[\d.]+)-(?<netId>\d+)-0x(?<note>[0-9a-fA-F]{124})/g;
@@ -1414,14 +1421,14 @@ function parseNote(noteString) {
 }
 
 /**
- * Parses Tornado.cash deposit invoice
+ * Parses Tornado Cash deposit invoice
  * @param invoiceString the note
  */
 function parseInvoice(invoiceString) {
   const noteRegex = /tornadoInvoice-(?<currency>\w+)-(?<amount>[\d.]+)-(?<netId>\d+)-0x(?<commitmentNote>[0-9a-fA-F]{64})/g;
   const match = noteRegex.exec(invoiceString);
   if (!match) {
-    throw new Error('The note has invalid format');
+    throw new Error('The invoice has invalid format');
   }
 
   const netId = Number(match.groups.netId);
@@ -1437,34 +1444,28 @@ function parseInvoice(invoiceString) {
 }
 
 async function loadDepositData({ amount, currency, deposit }) {
-  try {
-    const cachedEvents = await fetchEvents({ type: 'deposit', currency, amount });
-    const eventWhenHappened = await cachedEvents.filter(function (event) {
-      return event.commitment === deposit.commitmentHex;
-    })[0];
+  const { web3Instance, tornadoInstanceContract } = globals;
+  const cachedEvents = await fetchEvents({ type: 'deposit', currency, amount});
+  const depositEvent = cachedEvents.find(event => event.commitment === deposit.commitmentHex);
+  if (!depositEvent) throw new Error('There is no related deposit, the note is invalid');
 
-    if (eventWhenHappened.length === 0) {
-      throw new Error('There is no related deposit, the note is invalid');
-    }
+  const { timestamp } = await web3Instance.getBlock(depositEvent.blockNumber);
+  const txHash = depositEvent.transactionHash;
+  const isSpent = await tornadoInstanceContract.methods.isSpent(deposit.nullifierHex).call();
+  const receipt = await web3Instance.getTransactionReceipt(txHash);
 
-    const timestamp = eventWhenHappened.timestamp;
-    const txHash = eventWhenHappened.transactionHash;
-    const isSpent = await tornadoContract.methods.isSpent(deposit.nullifierHex).call();
-    const receipt = await web3.eth.getTransactionReceipt(txHash);
-
-    return {
-      timestamp,
-      txHash,
-      isSpent,
-      from: receipt.from,
-      commitment: deposit.commitmentHex
-    };
-  } catch (e) {
-    console.error('loadDepositData', e);
-  }
-  return {};
+  return {
+    timestamp,
+    txHash,
+    isSpent,
+    leafIndex: depositEvent.leafIndex,
+    from: receipt.from,
+    commitment: deposit.commitmentHex
+  };
 }
 async function loadWithdrawalData({ amount, currency, deposit }) {
+  const { netId, web3Instance } = globals;
+
   try {
     const cachedEvents = await fetchEvents({ type: 'withdrawal', currency, amount });
 
@@ -1477,7 +1478,7 @@ async function loadWithdrawalData({ amount, currency, deposit }) {
     const fee = withdrawEvent.fee;
     const decimals = config.deployments[`netId${netId}`]['tokens'][currency].decimals;
     const withdrawalAmount = toBN(fromDecimals({ amount, decimals })).sub(toBN(fee));
-    const { timestamp } = await web3.eth.getBlock(withdrawEvent.blockNumber);
+    const { timestamp } = await web3Instance.getBlock(withdrawEvent.blockNumber);
     return {
       amount: toDecimals(withdrawalAmount, decimals, 9),
       txHash: withdrawEvent.transactionHash,
@@ -1491,66 +1492,47 @@ async function loadWithdrawalData({ amount, currency, deposit }) {
   }
 }
 
-function statePreferences(program) {
-  const isPref = gasSpeedPreferences.includes(program.gas_speed);
-
-  if (program.gas_speed && !isPref) {
-    throw new Error('Invalid gas speed preference');
-  } else if (program.gas_speed) {
-    preferenceSpeed = program.gas_speed;
-  }
-
-  if (program.noconfirmation) {
-    shouldPromptConfirmation = false;
-  }
-  if (program.onlyRpc) {
-    privateRpc = true;
-  }
-  if (program.tor) {
-    torPort = program.tor;
-  }
-}
-
-async function promptConfirmation() {
-  const query = 'Confirm the transaction [Y/n] ';
+async function promptConfirmation(query) {
+  query = query || 'Confirm the transaction [Y/n] ';
   const confirmation = await new Promise((resolve) => prompt.question(query, resolve));
 
-  if (confirmation.toUpperCase() !== 'Y') {
-    throw new Error('Transaction rejected');
+  if (confirmation.toUpperCase() !== 'Y' && confirmation.toLowerCase() !== "yes") {
+    console.error('User rejected this action');
+    process.exit(1);
   }
 }
 
 /**
- * Create web3 instance with provided RPC link
+ * Create web3 eth instance with provider using RPC link
  * @param {string} rpc Full RPC link
- * @param {number} [torPort] TOR proxy port, if user provided it
- * @returns {Promise<Web3>} Initialized Web3 instance object
+ * @returns {Promise<Web3Eth>} Initialized Web3 instance object
  */
-async function createWeb3Instance(rpc, torPort){
+async function createWeb3Instance(rpc){
+  const { torPort }= globals;
+
+  let web3;
   if (torPort && rpc.startsWith('https')) {
-    console.log('Using tor network');
-    web3Options = { agent: { https: new SocksProxyAgent('socks5h://127.0.0.1:' + torPort) }, timeout: 60000 };
-    return new Web3(new Web3.providers.HttpProvider(rpc, web3Options), null, { transactionConfirmationBlocks: 1 });
+    web3Options = { agent: { https: new SocksProxyAgent('socks5h://127.0.0.1:' + torPort) }, timeout: 20000 };
+    web3 = new Web3(new Web3.providers.HttpProvider(rpc, web3Options), null, { transactionConfirmationBlocks: 1 });
   } else if (torPort && rpc.startsWith('http')) {
-    console.log('Using tor network');
-    web3Options = { agent: { http: new SocksProxyAgent('socks5h://127.0.0.1:' + torPort) }, timeout: 60000 };
-    return new Web3(new Web3.providers.HttpProvider(rpc, web3Options), null, { transactionConfirmationBlocks: 1 });
+    web3Options = { agent: { http: new SocksProxyAgent('socks5h://127.0.0.1:' + torPort) }, timeout: 20000 };
+    web3 = new Web3(new Web3.providers.HttpProvider(rpc, web3Options), null, { transactionConfirmationBlocks: 1 });
   } else if (rpc.includes('ipc')) {
     console.log('Using ipc connection');
-    return new Web3(new Web3.providers.IpcProvider(rpc, {}), null, { transactionConfirmationBlocks: 1 });
+    web3 = new Web3(new Web3.providers.IpcProvider(rpc, {}), null, { transactionConfirmationBlocks: 1 });
   } else if (rpc.startsWith('ws') || rpc.startsWith('wss')) {
     console.log('Using websocket connection (Note: Tor is not supported for Websocket providers)');
     web3Options = {
       clientConfig: { keepalive: true, keepaliveInterval: -1 },
       reconnect: { auto: true, delay: 1000, maxAttempts: 10, onTimeout: false }
     };
-    const web3instance = new Web3(new Web3.providers.WebsocketProvider(rpc, web3Options), null, { transactionConfirmationBlocks: 1 });
-    if (!(await web3instance.eth.net.isListening())) throw new Error('Cannot connect to websocket provider');
-    return web3instance;
+    web3 = new Web3(new Web3.providers.WebsocketProvider(rpc, web3Options), null, { transactionConfirmationBlocks: 1 });
   } else {
-    console.log('Connecting to remote node');
-    return new Web3(rpc, null, { transactionConfirmationBlocks: 1 });
+    console.log(`Connecting to remote node ${rpc}`);
+    web3 = new Web3(new Web3.providers.HttpProvider(rpc, {timeout: 10000, keepAlive: true}), null, { transactionConfirmationBlocks: 1 });
   }
+
+  return web3.eth;
 }
 
 /**
@@ -1559,168 +1541,140 @@ async function createWeb3Instance(rpc, torPort){
  * @param {string} [args.rpc] Full link to RPC node
  * @param {number} [args.chainId] Chain ID (1 - ETH, 56 - BSC etc)
  * @param {string} [args.privateKey] Private key from user account (64 symbols or 66 if starts from 0x)
+ * @param {string | number} [args.torPort] Port for Tor proxy, if user want to use it
+ * @param {boolean} [args.onlyRpc] Use only RPC without other network requests
+ * @param {EventType} [args.eventType] Applicable event type for user actions
+ * @param {string} [relayer] User-provided relayer link
  */
-async function initNetwork({rpc, chainId, privateKey}) {
+async function initNetwork({rpc, chainId, privateKey, torPort, onlyRpc, eventType, relayer}) {
 
-  if (chainId && !rpc) rpc = config.deployments[`netId${chainId}`].defaultRpc;
+  if (torPort) {
+    globals.torPort = torPort;
+    globals.requestOptions = {
+      ...globals.requestOptions, 
+      httpsAgent: new SocksProxyAgent('socks5h://127.0.0.1:' + torPort),
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; rv:91.0) Gecko/20100101 Firefox/91.0' }
+    };
+  }
 
-  web3 = await createWeb3Instance(rpc, torPort)
+  if (chainId && !rpc) {
+    const subgraphUrl = onlyRpc ? null : await selectDefaultGraph(chainId, eventType)
+    rpc = await selectDefaultRpc(chainId, eventType, subgraphUrl)
+  }
+
+  globals.web3Instance = await createWeb3Instance(rpc)
+  globals.netId = await globals.web3Instance.net.getId();
+  globals.netName = getCurrentNetworkName();
+  globals.netSymbol = getCurrentNetworkSymbol(globals.netId);
+
+  globals.feeOracle = Number(globals.netId) === 1 ? new TornadoFeeOracleV4(globals.netId, rpc) : new TornadoFeeOracleV5(globals.netId, rpc);
+
+  // Create web3 instance to fetch relayer on mainnet, if user want to get relayers list or withdraw, but he didn't provide relayer link
+  if (!relayer && !privateKey && (eventType === 'relayer' || eventType === 'withdrawal')){
+    if (globals.netId === 1) globals.relayerWeb3Instance = globals.web3Instance;
+    else {
+      const subgraphUrl = onlyRpc ? null : await selectDefaultGraph(1, 'relayer');
+      const relayerRPC = await selectDefaultRpc(1, 'relayer', subgraphUrl);
+      globals.relayerWeb3Instance = await createWeb3Instance(relayerRPC);
+    }
+  }
 
   const rpcHost = new URL(rpc).hostname;
   const isIpPrivate = is_ip_private(rpcHost);
 
-  if (!isIpPrivate && !rpc.includes('localhost') && !privateRpc) {
+  if (isIpPrivate || rpc.includes('localhost') || onlyRpc) {
+    console.log('Only RPC mode');
+    globals.useOnlyRpc = true;
+  }
+
+  if (!globals.useOnlyRpc) {
     try {
-      const htmlIPInfo = await axios.get('https://check.torproject.org', torPort ? {
-        httpsAgent: new SocksProxyAgent('socks5h://127.0.0.1:' + torPort),
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; rv:91.0) Gecko/20100101 Firefox/91.0' }
-      } : {});
+      const htmlIPInfo = await axios.get('https://check.torproject.org', globals.requestOptions);
       const ip = htmlIPInfo.data.split('Your IP address appears to be:  <strong>').pop().split('</')[0];
       console.log('Your remote IP address is', ip);
     } catch (error) {
       console.error('Could not fetch remote IP from check.torproject.org, use VPN if the problem repeats.');
     }
-  } else if (isIpPrivate || rpc.includes('localhost')) {
-    console.log('Local RPC detected');
-    privateRpc = true;
   }
 
   const privKey = privateKey || process.env.PRIVATE_KEY;
+  if (privKey) globals.privateKey = privKey.startsWith("0x") ? privKey.substring(2) : privKey;
 
-  if (privKey) {
-    if (privKey.startsWith('0x')) {
-      PRIVATE_KEY = privKey.substring(2);
-    } else {
-      PRIVATE_KEY = privKey;
-    }
+  if (globals.privateKey) {
+    const account = globals.web3Instance.accounts.privateKeyToAccount('0x' + globals.privateKey);
+    globals.web3Instance.accounts.wallet.add('0x' + globals.privateKey);
+    globals.web3Instance.defaultAccount = account.address;
+    globals.signerAddress = account.address;
   }
-  if (PRIVATE_KEY) {
-    const account = web3.eth.accounts.privateKeyToAccount('0x' + PRIVATE_KEY);
-    web3.eth.accounts.wallet.add('0x' + PRIVATE_KEY);
-    web3.eth.defaultAccount = account.address;
-    senderAccount = account.address;
-  }
+}
 
-  netId = await web3.eth.net.getId();
-  netName = getCurrentNetworkName();
-  netSymbol = getCurrentNetworkSymbol();
+/**
+ * Set user preferences in global program options object
+ * @param {Object} userPreferences
+ * @param {boolean} [userPreferences.nonconfirmation] Don't ask for confirmation for crucial actions
+ * @param {boolean} [userPreferences.localMode] Don't submit signed transactions to blockchain (remote nodes)
+ */
+function initPreferences({nonconfirmation, localMode}){
+  if (nonconfirmation) {
+    console.log("Non-confirmation mode detected: program won't ask confirmation for crucial actions")
+    globals.shouldPromptConfirmation = false;
+  }
+  if (localMode) {
+    console.log("Local mode detected: program won't submit signed TX to remote node");
+    globals.shouldSubmitTx = false;
+  }
 }
 
 /**
  * Init web3, all Tornado contracts, and snark
  */
-async function init({ rpc, chainId, currency = 'dai', amount = '100', balanceCheck, localMode, privateKey }) {
-  await initNetwork({rpc, chainId, privateKey})
+async function init({ rpc, chainId, currency = 'dai', amount = '100', privateKey, torPort, onlyRpc, nonconfirmation, localMode, eventType, relayer}) {
+  currency = currency.toLowerCase()
 
-  let contractJson, instanceJson, erc20ContractJson, erc20tornadoJson, tokenAddress;
-
-  contractJson = require('./build/contracts/TornadoProxy.abi.json');
-  instanceJson = require('./build/contracts/Instance.abi.json');
-  circuit = require('./build/circuits/tornado.json');
-  provingKey = fs.readFileSync('build/circuits/tornadoProvingKey.bin').buffer;
-  MERKLE_TREE_HEIGHT = process.env.MERKLE_TREE_HEIGHT || 20;
-  ETH_AMOUNT = process.env.ETH_AMOUNT;
-  TOKEN_AMOUNT = process.env.TOKEN_AMOUNT;
-
-  erc20ContractJson = require('./build/contracts/ERC20Mock.json');
-  erc20tornadoJson = require('./build/contracts/ERC20Tornado.json');
-  // groth16 initialises a lot of Promises that will never be resolved, that's why we need to use process.exit to terminate the CLI
-  groth16 = await buildGroth16();
-  feeOracle = Number(netId) === 1 ? new TornadoFeeOracleV4(netId, rpc) : new TornadoFeeOracleV5(netId, rpc);
-
+  initPreferences({nonconfirmation, localMode});
+  await initNetwork({rpc, chainId, privateKey, torPort, onlyRpc, eventType, relayer});
+  
+  const { netId, web3Instance } = globals;
   if (chainId && Number(chainId) !== netId) {
     throw new Error('This note is for a different network. Specify the --rpc option explicitly');
   }
-  if (netName === 'testRPC') {
-    isTestRPC = true;
-  }
-  if (localMode) {
-    console.log('Local mode detected: will not submit signed TX to remote node');
-    doNotSubmitTx = true;
-  }
 
-  if (isTestRPC) {
-    tornadoProxyAddress =
-      currency === netSymbol.toLowerCase() ? contractJson.networks[netId].address : erc20tornadoJson.networks[netId].address;
-    tokenAddress = currency !== netSymbol.toLowerCase() ? erc20ContractJson.networks[netId].address : null;
-    deployedBlockNumber = 0;
-    senderAccount = (await web3.eth.getAccounts())[0];
-  } else {
-    try {
-      if (balanceCheck) {
-        currency = netSymbol.toLowerCase();
-        amount = Object.keys(config.deployments[`netId${netId}`]['tokens'][currency].instanceAddress)[0];
-      }
-      tornadoProxyAddress = config.deployments[`netId${netId}`].proxy;
-      multiCall = config.deployments[`netId${netId}`].multicall;
-      subgraph = config.deployments[`netId${netId}`].subgraph;
-      tornadoInstance = config.deployments[`netId${netId}`]['tokens'][currency].instanceAddress[amount];
-      deployedBlockNumber = config.deployments[`netId${netId}`]['tokens'][currency].deployedBlockNumber[amount];
+  try {
+    globals.tornadoProxyAddress = config.deployments[`netId${netId}`].proxy;
+    globals.multiCallAddress = config.deployments[`netId${netId}`].multicall;
+    globals.tornadoInstanceAddress = config.deployments[`netId${netId}`]['tokens'][currency].instanceAddress[amount];
+    globals.instanceDeployedBlockNumber = config.deployments[`netId${netId}`]['tokens'][currency].deployedBlockNumber[amount];
 
-      if (!tornadoProxyAddress) {
-        throw new Error();
-      }
-      tokenAddress =
-        currency !== netSymbol.toLowerCase() ? config.deployments[`netId${netId}`]['tokens'][currency].tokenAddress : null;
-    } catch (e) {
-      console.error('There is no such tornado instance, check the currency and amount you provide', e);
-      process.exit(1);
+    if (!globals.tornadoProxyAddress) {
+      throw new Error("No Tornado Proxy for selected chain, did you provide correct chain id?");
     }
+    globals.instanceTokenAddress =
+      currency !== globals.netSymbol.toLowerCase() ? config.deployments[`netId${netId}`]['tokens'][currency].tokenAddress : null;
+  } catch (e) {
+    console.error('There is no such tornado instance, check the currency and amount you provide', e);
+    process.exit(1);
   }
-  tornado = new web3.eth.Contract(contractJson, tornadoProxyAddress);
-  tornadoContract = new web3.eth.Contract(instanceJson, tornadoInstance);
-  erc20 = currency !== netSymbol.toLowerCase() ? new web3.eth.Contract(erc20ContractJson.abi, tokenAddress) : {};
-  erc20Address = tokenAddress;
+  globals.tornadoProxyContract = new web3Instance.Contract(tornadoProxyAbi, globals.tornadoProxyAddress);
+  globals.tornadoInstanceContract = new web3Instance.Contract(tornadoInstanceAbi, globals.tornadoInstanceAddress);
+  globals.tornadoTokenInstanceContract = currency !== globals.netSymbol.toLowerCase() ? new web3Instance.Contract(erc20Abi, globals.instanceTokenAddress) : null;
 }
 
 async function main() {
   program
     .option('-r, --rpc <URL>', 'The RPC that CLI should interact with')
     .option('-R, --relayer <URL>', 'Withdraw via relayer')
-    .option('-T, --tor <PORT>', 'Optional tor port')
+    .option('-T, --tor-port <PORT>', 'Optional tor port')
     .option('-p, --private-key <KEY>', "Wallet private key - If you didn't add it to .env file and it is needed for operation")
-    .option('-S --gas-speed <SPEED>', 'Gas speed preference [ instant, fast, standard, low ]')
     .option('-N --noconfirmation', 'No confirmation mode - Does not query confirmation ')
-    .option('-L, --local-rpc', 'Local node mode - Does not submit signed transaction to the node')
-    .option('-o, --only-rpc', 'Only rpc mode - Does not enable thegraph api nor remote ip detection');
+    .option('-L, --local-mode', 'Local node mode - Does not submit signed transaction to the node')
+    .option('-o, --only-rpc', 'Only rpc mode - Does not enable subgraph api nor remote ip detection');
   program
-    .command('createNote <currency> <amount> <chainId>')
+    .command('deposit <currency> <amount> [chain_id]')
     .description(
-      'Create deposit note and invoice, allows generating private key like deposit notes from secure, offline environment. The currency is one of (ETH|DAI|cDAI|USDC|cUSDC|USDT). The amount depends on currency, see config.js file or visit https://tornado.cash.'
+      'Submit a deposit of specified currency and amount from default eth account and return the resulting note. The currency is one of (ETH|DAI|cDAI|USDC|cUSDC|USDT). The amount depends on currency, see config.js file or visit https://tornadocash.eth.link.'
     )
     .action(async (currency, amount, chainId) => {
-      currency = currency.toLowerCase();
-      await createInvoice({ currency, amount, chainId });
-    });
-  program
-    .command('depositInvoice <invoice>')
-    .description('Submit a deposit of invoice from default eth account and return the resulting note.')
-    .action(async (invoice) => {
-      statePreferences(program);
-
-      const { currency, amount, netId, commitmentNote } = parseInvoice(invoice);
-      await init({
-        rpc: program.rpc,
-        currency,
-        amount,
-        localMode: program.localRpc,
-        privateKey: program.privateKey,
-        chainId: netId
-      });
-      console.log('Creating', currency.toUpperCase(), amount, 'deposit for', netName, 'Tornado Cash Instance');
-      await deposit({ currency, amount, commitmentNote });
-    });
-  program
-    .command('deposit <currency> <amount>')
-    .description(
-      'Submit a deposit of specified currency and amount from default eth account and return the resulting note. The currency is one of (ETH|DAI|cDAI|USDC|cUSDC|USDT). The amount depends on currency, see config.js file or visit https://tornado.cash.'
-    )
-    .action(async (currency, amount) => {
-      currency = currency.toLowerCase();
-
-      statePreferences(program);
-
-      await init({ rpc: program.rpc, currency, amount, localMode: program.localRpc, privateKey: program.privateKey });
+      await init({ ...program, currency, amount, eventType: 'deposit', chainId });
       await deposit({ currency, amount });
     });
   program
@@ -1729,19 +1683,10 @@ async function main() {
       'Withdraw a note to a recipient account using relayer or specified private key. You can exchange some of your deposit`s tokens to ETH during the withdrawal by specifing ETH_purchase (e.g. 0.01) to pay for gas in future transactions. Also see the --relayer option.'
     )
     .action(async (noteString, recipient, refund) => {
-      statePreferences(program);
-
       const { currency, amount, netId, deposit } = parseNote(noteString);
-      userAction = 'withdrawal';
 
-      await init({
-        rpc: program.rpc,
-        chainId: netId,
-        currency,
-        amount,
-        localMode: program.localRpc,
-        privateKey: program.privateKey
-      });
+      await init({...program, chainId: netId, currency, amount, eventType: 'withdrawal'});
+
       await withdraw({
         deposit,
         currency,
@@ -1753,11 +1698,35 @@ async function main() {
       });
     });
   program
-    .command("listRelayers [chain_id]")
+    .command('createNote <currency> <amount> <chainId>')
+    .description(
+      'Create deposit note and invoice, allows generating private key like deposit notes from secure, offline environment. The currency is one of (ETH|DAI|cDAI|USDC|cUSDC|USDT). The amount depends on currency, see config.js file or visit https://tornadocash.eth.link.'
+    )
+    .action(async (currency, amount, chainId) => {
+      currency = currency.toLowerCase();
+      await createInvoice({ currency, amount, chainId });
+    });
+  program
+    .command('depositInvoice <invoice>')
+    .description('Submit a deposit of invoice from default eth account and return the resulting note.')
+    .action(async (invoice) => {
+
+      const { currency, amount, netId, commitmentNote } = parseInvoice(invoice);
+      await init({
+        ...program,
+        currency,
+        amount,
+        chainId: netId,
+        eventType: 'deposit'
+      });
+      console.log('Creating', currency.toUpperCase(), amount, 'deposit for', globals.netName, 'Tornado Cash Instance');
+      await deposit({ currency, amount, commitmentNote });
+    });
+  program
+    .command("listRelayers <chain_id>")
     .description("Check available relayers on selected chain. If you wantue non-default RPC, you should provide ONLY mainnet RPC urls")
     .action(async (chainId) => {
-      statePreferences(program);
-      await initNetwork({rpc: program.rpc, chainId: 1})
+      await initNetwork({...program, chainId: 1, eventType: 'relayer'})
       const availableRelayers = await getRelayers(chainId);
       console.log("There are " + availableRelayers.length + " available relayers")
 
@@ -1765,21 +1734,20 @@ async function main() {
         console.log({
           'hostname': 'https://' + relayer.hostname + '/',
           'ensName': relayer.ensName,
-          'stakeBalance': Number(web3.utils.fromWei(relayer.stakeBalance, 'ether')).toFixed(2)+" TORN",
+          'stakeBalance': Number(web3Utils.fromWei(relayer.stakeBalance, 'ether')).toFixed(2)+" TORN",
           'tornadoServiceFee': relayer.tornadoServiceFee + "%"
         });
       }
     });
   program
-    .command('balance [address] [token_address]')
+    .command('balance <address> [token_address]')
     .description('Check ETH and ERC20 balance')
     .action(async (address, tokenAddress) => {
-      statePreferences(program);
+      await initNetwork(program);
 
-      await init({ rpc: program.rpc, balanceCheck: true });
-      if (!address && senderAccount) {
-        console.log('Using address', senderAccount, 'from private key');
-        address = senderAccount;
+      if (!address && signerAddress) {
+        console.log('Using address', signerAddress, 'from private key');
+        address = signerAddress;
       }
       await printETHBalance({ address, name: 'Account' });
       if (tokenAddress) {
@@ -1790,18 +1758,16 @@ async function main() {
     .command('send <address> [amount] [token_address]')
     .description('Send ETH or ERC to address')
     .action(async (address, amount, tokenAddress) => {
-      statePreferences(program);
+      initPreferences(program);
+      await initNetwork(program);
 
-      await init({ rpc: program.rpc, balanceCheck: true, localMode: program.localRpc, privateKey: program.privateKey });
       await send({ address, amount, tokenAddress });
     });
   program
     .command('broadcast <signedTX>')
     .description('Submit signed TX to the remote node')
     .action(async (signedTX) => {
-      statePreferences(program);
-
-      await init({ rpc: program.rpc, balanceCheck: true });
+      await initNetwork(program);
       await submitTransaction(signedTX);
     });
   program
@@ -1810,11 +1776,10 @@ async function main() {
       'Shows the deposit and withdrawal of the provided note. This might be necessary to show the origin of assets held in your withdrawal address.'
     )
     .action(async (noteString) => {
-      statePreferences(program);
 
       const { currency, amount, netId, deposit } = parseNote(noteString);
 
-      await init({ rpc: program.rpc, chainId: netId, currency, amount });
+      await init({ ...program, chainId: netId, currency, amount, eventType: 'withdrawal', relayer: "dummy"});
 
       const depositInfo = await loadDepositData({ amount, currency, deposit });
       const withdrawInfo = await loadWithdrawalData({ amount, currency, deposit });
@@ -1845,35 +1810,32 @@ async function main() {
       console.log('=====================================', '\n');
     });
   program
-    .command('syncEvents <type> <currency> <amount>')
+    .command('syncEvents <type> <currency> <amount> [chain_id]')
     .description('Sync the local cache file of deposit / withdrawal events for specific currency.')
-    .action(async (type, currency, amount) => {
-      currency = currency.toLowerCase();
-
-      statePreferences(program);
+    .action(async (type, currency, amount, chainId) => {
       console.log('Starting event sync command');
 
-      await init({ rpc: program.rpc, type, currency, amount });
-      const cachedEvents = await fetchEvents({ type, currency, amount, filterEvents: false });
+      await init({ ...program, currency, amount, chainId});
+      if (type === "withdraw") type === "withdrawal";
+
+      const cachedEvents = await fetchEvents({ type, currency, amount });
       console.log(
         'Synced event for',
         type,
         amount,
         currency.toUpperCase(),
-        netName,
+        globals.netName,
         'Tornado instance to block',
         cachedEvents[cachedEvents.length - 1].blockNumber
       );
     });
   program
-    .command('checkCacheValidity <currency> <amount>')
+    .command('checkCacheValidity <currency> <amount> [chain_id]')
     .description('Check cache file of deposit events for specific currency for validity of the root.')
-    .action(async (currency, amount) => {
-      statePreferences(program);
-
+    .action(async (currency, amount, chainId) => {
       const type = 'deposit';
 
-      await init({ rpc: program.rpc, type, currency: currency.toLowerCase(), amount });
+      await init({ ...program, currency, amount, chainId, eventType: type });
       const depositCachedEvents = await fetchEvents({ type, currency, amount });
       const isValidRoot = await isRootValid(depositCachedEvents);
 
@@ -1882,7 +1844,7 @@ async function main() {
         amount,
         currency.toUpperCase(),
         'on',
-        netName,
+        globals.netName,
         'chain',
         isValidRoot ? 'has valid root' : 'is invalid, unknown root. You need to reset cache to zero array or to latest git state'
       );
@@ -1891,49 +1853,14 @@ async function main() {
     const parse = parseNote(noteString);
 
     netId = parse.netId;
-    netName = getCurrentNetworkName();
 
     console.log('\n=============Note=================');
-    console.log('Network:', netName);
+    console.log('Network:',  getCurrentNetworkName());
     console.log('Denomination:', parse.amount, parse.currency.toUpperCase());
     console.log('Commitment: ', parse.deposit.commitmentHex);
     console.log('Nullifier Hash: ', parse.deposit.nullifierHex);
     console.log('=====================================', '\n');
   });
-  program
-    .command('test')
-    .description('Perform an automated test. It deposits and withdraws one ETH and one ERC20 note. Uses ganache.')
-    .action(async () => {
-      privateRpc = true;
-      console.log('Start performing ETH deposit-withdraw test');
-      let currency = 'eth';
-      let amount = '0.1';
-      await init({ rpc: program.rpc, currency, amount, privateKey: program.privateKey });
-      let noteString = await deposit({ currency, amount });
-      let parsedNote = parseNote(noteString);
-      await withdraw({
-        deposit: parsedNote.deposit,
-        currency,
-        amount,
-        recipient: senderAccount,
-        relayerURL: program.relayer
-      });
-
-      console.log('\nStart performing DAI deposit-withdraw test');
-      currency = 'dai';
-      amount = '100';
-      await init({ rpc: program.rpc, currency, amount });
-      noteString = await deposit({ currency, amount });
-      parsedNote = parseNote(noteString);
-      await withdraw({
-        deposit: parsedNote.deposit,
-        currency,
-        amount,
-        recipient: senderAccount,
-        refund: '0.02',
-        relayerURL: program.relayer
-      });
-    });
   try {
     await program.parseAsync(process.argv);
     process.exit(0);

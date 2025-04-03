@@ -1,8 +1,16 @@
 # Tornado-CLI
 
-Command line tool to interact with [Tornado Cash](https://tornado.ws).
+Command line tool to interact with [Tornado Cash protocol](https://docs.tornado.ws).
 
-### How to install tornado cli
+### How to install Tornado CLI
+
+##### Simple installation for Windows users:
+
+Download archive file from this git: https://git.tornado.ws/tornadocash/tornado-cli/archive/master.zip
+
+Extract it and you can run CLI executable file (but don't move it from this directory): `tornado-cli.exe -h`
+
+##### Advanced installation (for professional users, any platform):
 
 Download and install [node.js](https://nodejs.org/en/download/).
 
@@ -29,63 +37,78 @@ $ cd tornado-cli
 $ npm install
 ```
 
-If you want to use Tor connection to conceal ip address, install [Tor Browser](https://www.torproject.org/download/) and add `--tor 9150` for `cli.js` if you connect tor with browser. (For non tor-browser tor service you can use the default 9050 port).
+And you can run it with command `node cli.js -h`. Note, that in examples below I'll use commands with `tornado-cli.exe` calls for unexperienced users, you should always change `tornado-cli.exe` to `node cli.js`, if you want to use JS version (they are the same anyway).
+
+### Safety instructions
+
+##### Connections
+
+If you want to use Tor connection to conceal ip address, install [Tor Browser](https://www.torproject.org/download/) and add `--tor-port 9150` for `cli.js` if you connect tor with browser. (For non tor-browser tor service you can use the default 9050 port).
 
 Note that you should reset your tor connection by restarting the browser every time when you deposit & withdraw otherwise you will have the same exit node used for connection.
 
-### Goerli, Mainnet, Binance Smart Chain, Gnosis Chain, Polygon Network, Arbitrum, Avalanche
+Also, you can use VPN for CLI without Tor or even combine it.
 
-1. `node cli.js --help`
-2. If you want to use secure, anonymous tor connection add `--tor <torPort>` behind the command.
+##### Source verification for experienced users
+
+All code logic located in `cli.js`, other files is just testing scripts or static files. You can check or change any part of the code and at next `node cli.js` run changes will apply.
+
+Any user can check that the precompiled `tornado-cli.exe` matches the source code. To build `tornado-cli.exe`, [pkg](https://www.npmjs.com/package/pkg) package is used, which allows creating deterministic and reproducible executable from source. Creating script is located at `./scripts/createDeterministicExecutable.js`, and you can rebuild executable with command `npm run createExe`, or you can verify that sha1 hash of existing executable matches new executable, verification script located at `./scripts/verifyExecutable` and you can call it with command `npm run verifyExe` and compare hashes.
+
+### Commands and usage
+
+1. Run `tornado-cli.exe --help` and check available commands with arguments
 3. Add `PRIVATE_KEY` to `.env` file (optional, only if you want to use it for many operations) - open `.env.example` file, add private key after `PRIVATE_KEY=` and rename file to `.env`.
 
 #### To deposit:
 
 ```bash
-$ node cli.js deposit <currency> <amount> --rpc <rpc url> --tor <torPort> --private-key <private key>
+tornado-cli.exe deposit <currency> <amount> [chain_id] --private-key <private key> --rpc <rpc link>
 ```
 
-Note that `--tor <torPort>` is optional, and use `--private-key <private key>` only if you didn't add it to `.env` file.
+Use `--private-key <private key>` only if you didn't add it to `.env` file.
 
-For RPC nodes please refer to the list of public RPC nodes below.
+Option `--rpc` is optional, if you select `chain_id` and wouldn't provide it, it will be automatically selected from list of default RPCs.
 
 ##### Example:
 
 ```bash
-$ node cli.js deposit ETH 0.1 --rpc https://mainnet.chainnodes.org/d692ae63-0a7e-43e0-9da9-fe4f4cc6c607 --tor 9150
+$ tornado-cli.exe deposit ETH 0.1 1
 
-Your note: tornado-eth-0.1-5-0xf73dd6833ccbcc046c44228c8e2aa312bf49e08389dadc7c65e6a73239867b7ef49c705c4db227e2fadd8489a494b6880bdcb6016047e019d1abec1c7652
+Your note: tornado-eth-0.1-1-0xf73dd6833ccbcc046c44228c8e2aa312bf49e08389dadc7c65e6a73239867b7ef49c705c4db227e2fadd8489a494b6880bdcb6016047e019d1abec1c7652
 Tornado ETH balance is 8.9
-Sender account ETH balance is 1004873.470619891361352542
+Sender account ETH balance is 103.470619891361352542
 Submitting deposit transaction
 Tornado ETH balance is 9
-Sender account ETH balance is 1004873.361652048361352542
+Sender account ETH balance is 103.361652048361352542
 ```
 
 #### To withdraw:
 
 ```bash
-$ node cli.js withdraw <note> <recipient> --rpc <rpc url> --relayer <relayer url> --tor <torPort> --private-key <private key>
+$ node cli.js withdraw <note> <recipient> --rpc <rpc url> --relayer <relayer url> --private-key <private key>
 ```
 
-Note that `--relayer <relayer url>`, `--tor <torPort>` and `--rpc <rpc url>` are optional parameters, and use `--private-key <private key>` only if you withdraw without relayer.
-You can don't provide RPC link and withdrawal will be made via default RPC for the chain to which note belongs.
+Note that `--relayer <relayer url>`, `--tor <torPort>` and `--rpc <rpc url>` are optional parameters, and use `--private-key <private key>` only if you want to withdraw without relayer.
+If you won't provide RPC link, withdrawal will be made via default RPC for the chain to which note belongs.
 
-If you want to use Tornado Cash relayer for your first withdrawal to your new ethereum account, you can use `listRelayers` command to get list of available relayers for your chain or just don't specify relayer at all - it will fetch relayer autimatic, as in UI.
+If you won't provide relayer link, it will be automatically select from all registered relayers using official relayer selection formula.
+
+If you want to compare relayers info and select by yourself, you can use `listRelayers` command to get list of available relayers for your chain or just don't specify relayer at all - it will fetch relayer autimatic, as in UI.
 
 If you don't need relayer while doing withdrawals, you must provide your withdrawal account's private key - either as parameter, or by adding it to `.env` file.
 
 ##### Example:
 
 ```bash
-$ node cli.js withdraw tornado-eth-0.1-5-0xf73dd6833ccbcc046c44228c8e2aa312bf49e08389dadc7c65e6a73239867b7ef49c705c4db227e2fadd8489a494b6880bdcb6016047e019d1abec1c7652 0x8589427373D6D84E98730D7795D8f6f8731FDA16 --rpc https://mainnet.chainnodes.org/d692ae63-0a7e-43e0-9da9-fe4f4cc6c607 --relayer https://goerli-relay.example.org --tor 9150
+$ tornado-cli.exe withdraw tornado-eth-0.1-1-0xf73dd6833ccbcc046c44228c8e2aa312bf49e08389dadc7c65e6a73239867b7ef49c705c4db227e2fadd8489a494b6880bdcb6016047e019d1abec1c7652 0x8589427373D6D84E98730D7795D8f6f8731FDA16
 
 Relay address:  0x6A31736e7490AbE5D5676be059DFf064AB4aC754
 Getting current state from tornado contract
 Generating SNARK proof
 Proof time: 9117.051ms
 Sending withdraw transaction through relay
-Transaction submitted through the relay. View transaction on etherscan https://goerli.etherscan.io/tx/0xcb21ae8cad723818c6bc7273e83e00c8393fcdbe74802ce5d562acad691a2a7b
+Transaction submitted through the relay. View transaction on etherscan https://etherscan.io/tx/0xcb21ae8cad723818c6bc7273e83e00c8393fcdbe74802ce5d562acad691a2a7b
 Transaction mined in block 17036120
 Done
 ```

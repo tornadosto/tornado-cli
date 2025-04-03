@@ -28,12 +28,12 @@ function getCurrentNetworkName(networkID) {
   }
 }
 
-function syncDeposits(currency, amount, rpc) {
-  return childProcess.spawnSync('node', ['cli.js', 'checkCacheValidity', currency, amount, '--rpc', rpc]);
+function syncDeposits(currency, amount, networkID) {
+  return childProcess.spawnSync('node', ['cli.js', 'checkCacheValidity', currency, amount, networkID]);
 }
 
-function syncWithdrawals(currency, amount, rpc) {
-  return childProcess.spawnSync('node', ['cli.js', 'syncEvents', 'withdrawal', currency, amount, '--rpc', rpc]);
+function syncWithdrawals(currency, amount, networkID) {
+  return childProcess.spawnSync('node', ['cli.js', 'syncEvents', 'withdrawal', currency, amount, networkID]);
 }
 
 function checkSyncResult(resultData, networkName, currency, amount, eventType) {
@@ -48,29 +48,35 @@ function checkSyncResult(resultData, networkName, currency, amount, eventType) {
 }
 
 function main() {
+  const fromScrath = false;
   for (const [networkIDInfo, network] of Object.entries(config.deployments)) {
     const networkID = Number(networkIDInfo.match(/\d+/)[0]);
     const networkName = getCurrentNetworkName(networkID);
-    const defaultRpc = network.defaultRpc;
 
     for (const [currency, _data] of Object.entries(network.tokens)) {
       for (const amount of Object.keys(_data.instanceAddress)) {
+        if(networkID === 10 && amount == 100) continue; // skip 100 ETH optimism, there is no deposits
         console.log(`\nStart updating cache for ${currency.toUpperCase()} ${amount} deposits on ${networkName}`);
-        const depositsFile = path.join('cache', networkName.toLowerCase(), `deposits_${currency.toUpperCase()}_${amount}.json`);
-        let depositSyncResult = syncDeposits(currency, amount, defaultRpc);
+        const depositsFile = path.join('cache', networkName.toLowerCase(), `deposits_${currency.toLowerCase()}_${amount}.json`);
+        const withdrawalFile = path.join('cache', networkName.toLowerCase(), `withdrawals_${currency.toLowerCase()}_${amount}.json`);
+        if(fromScrath) {
+          fs.rmSync(depositsFile, {force: true});
+          fs.rmSync(withdrawalFile, {force: true});
+        }
+        let depositSyncResult = syncDeposits(currency, amount, networkID);
 
         // If deposit events tree has invalid root, need to reload it all from deployment block
         if (depositSyncResult.output.includes('invalid root')) {
           console.log(
             `Events tree for ${currency.toUpperCase()} ${amount} ${eventType}s on ${networkName} has invalid root. Start full reloading.`
           );
-          fs.rmSync(depositsFile);
-          depositSyncgResult = syncDeposits(currency, amount, defaultRpc);
+          fs.rmSync(depositsFile, {force: true});
+          depositSyncResult = syncDeposits(currency, amount, defaultRpc);
         }
         checkSyncResult(depositSyncResult, networkName, currency, amount, 'deposit');
 
         console.log(`\nStart updating cache for ${currency.toUpperCase()} ${amount} withdrawals on ${networkName}`);
-        const withdrawalSyncResult = syncWithdrawals(currency, amount, defaultRpc);
+        const withdrawalSyncResult = syncWithdrawals(currency, amount, networkID);
         checkSyncResult(withdrawalSyncResult, networkName, currency, amount, 'withdrawal');
       }
     }
