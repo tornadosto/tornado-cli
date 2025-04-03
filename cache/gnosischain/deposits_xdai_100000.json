@@ -4,24 +4,20 @@
     "transactionHash": "0x5a712e830c72fc05df22011841526ed454e24298ea17b2b27192209bd1053a19",
     "commitment": "0x16ffda1ca3699ffb8a07bc22acaa41d51b4ded262c2e7bfdb15028ea91556205",
     "leafIndex": 0,
-    "timestamp": "1630001485"
+    "timestamp": 1630001485
   },
   {
     "blockNumber": 17775292,
     "transactionHash": "0x052f7dc7dfbd60ae19eb9ad501d53ebdd4b47ece455143b74df50a9f0a8a9b2c",
     "commitment": "0x20b19b2f530b34bf5625b7b4b19f1437b11fe0c4afe1e838db126bca978b8aa3",
     "leafIndex": 1,
-    "timestamp": "1630001635"
+    "timestamp": 1630001635
   },
   {
     "blockNumber": 22117256,
     "transactionHash": "0xfce2bd5aa3cc6f2104550b5b6997283ebdb62e81791548e4c55c0838075c6b9b",
     "commitment": "0x101de3f330d13d8d333e6f2f93f953816f035ddc64006940d501d385e93093cf",
     "leafIndex": 2,
-    "timestamp": "1652412775"
-  },
-  {
-    "blockNumber": 29675864,
-    "transactionHash": null
+    "timestamp": 1652412775
   }
 ]
