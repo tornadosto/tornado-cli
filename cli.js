@@ -74,7 +74,8 @@ const relayerSubdomains = Object.values(config.deployments).map(({ ensSubdomainK
  */
 
 /** @type {ProgramGlobals} */
-const globals = {
+const globals = 
+{
   privateKey: undefined,
   web3Instance: undefined,
   relayerWeb3Instance: undefined,
@@ -288,7 +289,8 @@ async function generateTransaction(to, encodedData, value = 0, txType = 'other')
 /**
  * Create deposit object from secret and nullifier
  */
-function createDeposit({ nullifier, secret }) {
+function createDeposit({ nullifier, secret }) 
+{
   let deposit = { nullifier, secret };
   deposit.preimage = Buffer.concat([deposit.nullifier.leInt2Buff(31), deposit.secret.leInt2Buff(31)]);
   deposit.commitment = pedersenHash(deposit.preimage);
@@ -328,7 +330,8 @@ async function backupInvoice({ currency, amount, netId, commitmentNote, invoiceS
  * @param currency Сurrency
  * @param amount Deposit amount
  */
-async function createInvoice({ currency, amount, chainId }) {
+async function createInvoice({ currency, amount, chainId }) 
+{
   const deposit = createDeposit({
     nullifier: rbigint(31),
     secret: rbigint(31)
@@ -422,7 +425,8 @@ async function deposit({ currency, amount, commitmentNote }) {
  * @param {number} amount Tornado instance amount, like 0.1 (ETH or BNB) or 10
  * @return {Promise<MerkleProof>} Calculated valid merkle tree (proof)
  */
-async function generateMerkleProof(deposit, currency, amount) {
+async function generateMerkleProof(deposit, currency, amount) 
+{
   const { web3Instance, multiCallAddress, tornadoInstanceContract } = globals;
 
   // Get all deposit events from smart contract and assemble merkle tree from them
@@ -469,13 +473,16 @@ async function generateMerkleProof(deposit, currency, amount) {
  * @param {MerkleProof} [args.merkleProof] Valid merkle tree proof
  * @returns {Promise<ProofData>} Proof data
  */
-async function generateProof({ deposit, currency, amount, recipient, relayerAddress = 0, fee = 0, refund = 0, merkleProof }) {
+async function generateProof({ deposit, currency, amount, recipient, relayerAddress = 0, fee = 0, refund = 0, merkleProof }) 
+{
   // Compute merkle proof of our commitment
-  if (merkleProof === undefined) merkleProof = await generateMerkleProof(deposit, currency, amount);
+  if (merkleProof === undefined) 
+    merkleProof = await generateMerkleProof(deposit, currency, amount);
   const { root, pathElements, pathIndices } = merkleProof;
 
   // Prepare circuit input
-  const input = {
+  const input = 
+  {
     // Public snark inputs
     root: root,
     nullifierHash: deposit.nullifierHash,
@@ -518,65 +525,86 @@ async function generateProof({ deposit, currency, amount, recipient, relayerAddr
  * @param noteString Note to withdraw
  * @param recipient Recipient address
  */
-async function withdraw({ deposit, currency, amount, recipient, relayerURL, refund, privateKey }) {
+async function withdraw({ deposit, currency, amount, recipient, relayerURL, refund, privateKey }) 
+{
   const { web3Instance, signerAddress, tornadoProxyAddress, requestOptions, feeOracle, tornadoInstanceAddress, tornadoProxyContract, netSymbol, netId, shouldPromptConfirmation } = globals;
-  if (currency === netSymbol.toLowerCase() && refund && refund !== '0') {
+  if (currency === netSymbol.toLowerCase() && refund && refund !== '0') 
+  {
     throw new Error('The ETH purchase is supposed to be 0 for ETH withdrawals');
   }
 
-  if (!isNaN(Number(refund))) refund = toWei(refund, 'ether');
-  else refund = toBN(await feeOracle.fetchRefundInETH(currency.toLowerCase()));
+  if (!isNaN(Number(refund))) 
+    refund = toWei(refund, 'ether');
+  else 
+    refund = toBN(await feeOracle.fetchRefundInETH(currency.toLowerCase()));
 
-  if (!web3Utils.isAddress(recipient)) {
+  if (!web3Utils.isAddress(recipient)) 
+  {
     throw new Error('Recipient address is not valid');
   }
 
   const depositInfo = await loadDepositData({ amount, currency, deposit });
   const allDeposits = loadCachedEvents({ type: "deposit", currency, amount });
-  if ((depositInfo.leafIndex > allDeposits[allDeposits.length - 1].leafIndex - 10) && allDeposits.length > 10){
+  if ((depositInfo.leafIndex > allDeposits[allDeposits.length - 1].leafIndex - 10) 
+      && allDeposits.length > 10)
+  {
     console.log("\nWARNING: you're trying to withdraw your deposit too early, there are not enough subsequent deposits to ensure good anonymity level. Read: https://docs.tornado.ws/general/guides/opsec.html");
-    if (shouldPromptConfirmation) await promptConfirmation("Continue withdrawal with risks to anonymity? [Y/n]: ")
+    if (shouldPromptConfirmation) 
+      await promptConfirmation("Continue withdrawal with risks to anonymity? [Y/n]: ")
   }
   const withdrawInfo = await loadWithdrawalData({ amount, currency, deposit });
-  if(withdrawInfo) {
+  if(withdrawInfo) 
+  {
     console.error("\nError: note has already been withdrawn. Use `compliance` command to check deposit and withdrawal info.\n");
     process.exit(1);
   }
 
-  if (privateKey || globals.privateKey) {
+  if (privateKey || globals.privateKey) 
+  {
     // using private key
 
     // check if the address of recepient matches with the account of provided private key from environment to prevent accidental use of deposit address for withdrawal transaction.
-    assert(
+    assert
+    (
       recipient.toLowerCase() == signerAddress.toLowerCase(),
       'Withdrawal recepient mismatches with the account of provided private key from environment file'
     );
     const checkBalance = await web3Instance.getBalance(signerAddress);
-    assert(checkBalance !== 0, 'You have 0 balance, make sure to fund account by withdrawing from tornado using relayer first');
+    assert
+    (
+      checkBalance !== 0, 
+      'You have 0 balance, make sure to fund account by withdrawing from tornado using relayer first'
+    );
 
     const { proof, args } = await generateProof({ deposit, currency, amount, recipient, refund });
 
     console.log('Submitting withdraw transaction');
-    await generateTransaction(
+    await generateTransaction
+    (
       tornadoProxyAddress,
       tornadoProxyContract.methods.withdraw(tornadoInstanceAddress, proof, ...args).encodeABI(),
       toBN(args[5]),
       'user_withdrawal'
     );
   }
-  else {
+  else 
+  {
     let relayerInfo;
-    if (relayerURL) {
-      try {
+    if (relayerURL) 
+    {
+      try 
+      {
         relayerURL = new URL(relayerURL).origin;
         res = await axios.get(relayerURL + '/status', requestOptions);
         relayerInfo = res.data;
-      } catch (err) {
+      } catch (err) 
+      {
         console.error(err);
         throw new Error('Cannot get relayer status');
       }
     }
-    else {
+    else 
+    {
       const availableRelayers = await getRelayers(netId);
       if(availableRelayers.length === 0) throw new Error("Cannot automatically pick a relayer to withdraw your note. Provide relayer manually with `--relayer` cmd option or use private key withdrawal")
       relayerInfo = pickWeightedRandomRelayer(availableRelayers);
@@ -667,9 +695,12 @@ async function withdraw({ deposit, currency, amount, recipient, relayerURL, refu
     }
   } 
 
-  if (currency === netSymbol.toLowerCase()) {
+  if (currency === netSymbol.toLowerCase()) 
+  {
     await printETHBalance({ address: recipient, name: 'Recipient' });
-  } else {
+  } 
+  else 
+  {
     await printERC20Balance({ address: recipient, name: 'Recipient' });
   }
   console.log('Done withdrawal from Tornado Cash');
@@ -870,6 +901,10 @@ function toDecimals(value, decimals, fixed) {
 // List fetched from https://github.com/ethereum-lists/chains/blob/master/_data/chains
 function getExplorerLink() {
   switch (globals.netId) {
+    case 61:
+      return 'etc.blockscout.com';
+    case 11155111:
+      return 'sepolia.etherscan.io';
     case 56:
       return 'bscscan.com';
     case 100:
@@ -894,6 +929,10 @@ function getExplorerLink() {
 // List fetched from https://github.com/trustwallet/assets/tree/master/blockchains
 function getCurrentNetworkName() {
   switch (globals.netId) {
+    case 61:
+      return 'EthereumClassic';
+    case 11155111:
+      return 'Sepolia';
     case 56:
       return 'BinanceSmartChain';
     case 100:
@@ -920,6 +959,8 @@ function getCurrentNetworkName() {
  */
 function getCurrentNetworkSymbol(chainId) {
   switch (Number(chainId)) {
+    case 61:
+      return 'ETC';
     case 56:
       return 'BNB';
     case 100:
@@ -1399,10 +1440,12 @@ async function fetchEvents({ type, currency, amount }) {
  * Parses Tornado Cash note
  * @param {string} noteString the note
  */
-function parseNote(noteString) {
+function parseNote(noteString) 
+{
   const noteRegex = /tornado-(?<currency>\w+)-(?<amount>[\d.]+)-(?<netId>\d+)-0x(?<note>[0-9a-fA-F]{124})/g;
   const match = noteRegex.exec(noteString);
-  if (!match) {
+  if (!match) 
+  {
     throw new Error('The note has invalid format');
   }
 
@@ -1563,7 +1606,7 @@ async function initNetwork({rpc, chainId, privateKey, torPort, onlyRpc, eventTyp
   }
 
   globals.web3Instance = await createWeb3Instance(rpc)
-  globals.netId = await globals.web3Instance.net.getId();
+  globals.netId = await globals.web3Instance.getChainId()
   globals.netName = getCurrentNetworkName();
   globals.netSymbol = getCurrentNetworkSymbol(globals.netId);
 
@@ -1633,8 +1676,9 @@ async function init({ rpc, chainId, currency = 'dai', amount = '100', privateKey
 
   initPreferences({nonconfirmation, localMode});
   await initNetwork({rpc, chainId, privateKey, torPort, onlyRpc, eventType, relayer});
-  
+
   const { netId, web3Instance } = globals;
+  // console.log(netId, chainId);
   if (chainId && Number(chainId) !== netId) {
     throw new Error('This note is for a different network. Specify the --rpc option explicitly');
   }
