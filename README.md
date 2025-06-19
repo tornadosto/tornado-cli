@@ -163,3 +163,21 @@ View transaction on block explorer https://goerli.etherscan.io/tx/0x6ded443caed8
 Tornado contract balance is xxx.x ETH
 Sender account balance is x.xxxxxxx ETH
 ```
+
+#### To verify:
+
+```bash
+$ docker build -t tornado-cli:latest .
+```
+wait for docker to build
+
+```bash
+$ docker run --rm -v %cd%/output:/output tornado-cli:latest /copy_out.sh
+```
+copy exe to current folder in windows
+
+```bash
+CertUtil -hashfile output/tornado-cli.exe SHA256
+CertUtil -hashfile tornado-cli.exe SHA256
+```
+compare with the exe in git

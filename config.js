@@ -114,9 +114,15 @@ module.exports = {
       relayerAggregator: '0xE8F47A78A6D52D317D0D2FFFac56739fE14D1b49',
       proxy: '0xd90e2f925DA726b50C4Ed8D0Fb90Ad053324F31b',
       multicall: '0xeefBa1e63905eF1D7ACbA5a8513c70307C1cE441',
-      subgraphs: ['https://gateway.thegraph.com/api/6a217817dd87d33db10beed79b044a91/subgraphs/id/Ec6fVMDVqXTDQZ3c4jxcyV3zBXqkdgMWfhdtCgtqn7Sh', 'https://gateway.thegraph.com/api/8b164501e1862078eff5fb9dda136c6c/subgraphs/id/Ec6fVMDVqXTDQZ3c4jxcyV3zBXqkdgMWfhdtCgtqn7Sh', 'https://tornadocash-rpc.com/subgraphs/name/tornadocash/mainnet-tornado-subgraph'],
+      subgraphs: ['https://gateway.thegraph.com/api/6a217817dd87d33db10beed79b044a91/subgraphs/id/Ec6fVMDVqXTDQZ3c4jxcyV3zBXqkdgMWfhdtCgtqn7Sh', 
+                  'https://gateway.thegraph.com/api/8b164501e1862078eff5fb9dda136c6c/subgraphs/id/Ec6fVMDVqXTDQZ3c4jxcyV3zBXqkdgMWfhdtCgtqn7Sh', 
+                  'https://tornadocash-rpc.com/subgraphs/name/tornadocash/mainnet-tornado-subgraph'],
       relayerSubgraphs: ['https://gateway.thegraph.com/api/6a217817dd87d33db10beed79b044a91/subgraphs/id/DgKwfAbLfynpiq7fDJy59LDnVnia4Y5nYeRDBYi9qezc', 'https://gateway.thegraph.com/api/8b164501e1862078eff5fb9dda136c6c/subgraphs/id/DgKwfAbLfynpiq7fDJy59LDnVnia4Y5nYeRDBYi9qezc', 'https://tornadocash-rpc.com/subgraphs/name/tornadocash/tornado-relayer-registry'],
-      defaultRpcs: ['https://ethereum.blockpi.network/v1/rpc/public', 'https://eth.drpc.org', 'https://ethereum-rpc.publicnode.com', 'https://mainnet.chainnodes.org/3ae3d849-a613-4917-a56e-080f181aa4da', 'https://tornadocash-rpc.com']
+      defaultRpcs: ['https://ethereum.blockpi.network/v1/rpc/public', 
+                    'https://eth.drpc.org', 
+                    'https://ethereum-rpc.publicnode.com', 
+                    'https://mainnet.chainnodes.org/3ae3d849-a613-4917-a56e-080f181aa4da', 
+                    'https://tornadocash-rpc.com']
     },
     netId56: {
       tokens: {
@@ -143,7 +149,12 @@ module.exports = {
       proxy: '0x0D5550d52428E7e3175bfc9550207e4ad3859b17',
       multicall: '0x41263cBA59EB80dC200F3E2544eda4ed6A90E76C',
       subgraphs: ['https://gateway.thegraph.com/api/6a217817dd87d33db10beed79b044a91/subgraphs/id/CiwGzefDBZCavXRPnwarnnF8xDDoLw4boBuySomJWYnV', 'https://tornadocash-rpc.com/subgraphs/name/tornadocash/bsc-tornado-subgraph', 'https://gateway.thegraph.com/api/8b164501e1862078eff5fb9dda136c6c/subgraphs/id/CiwGzefDBZCavXRPnwarnnF8xDDoLw4boBuySomJWYnV'],
-      defaultRpcs: ['https://bsc-rpc.publicnode.com', 'https://endpoints.omniatech.io/v1/bsc/mainnet/public', 'https://bsc-mainnet.chainnodes.org/3ae3d849-a613-4917-a56e-080f181aa4da', 'https://bsc-dataseed1.ninicoin.io', 'https://bsc.drpc.org', 'https://bsc-mainnet.public.blastapi.io']
+      defaultRpcs: ['https://bsc-rpc.publicnode.com', 
+                    'https://endpoints.omniatech.io/v1/bsc/mainnet/public', 
+                    'https://bsc-mainnet.chainnodes.org/3ae3d849-a613-4917-a56e-080f181aa4da', 
+                    'https://bsc-dataseed1.ninicoin.io', 
+                    'https://bsc.drpc.org', 
+                    'https://bsc-mainnet.public.blastapi.io']
     },
     netId100: {
       tokens: {
@@ -277,6 +288,80 @@ module.exports = {
       multicall: '0x142E2FEaC30d7fc3b61f9EE85FCCad8e560154cc',
       subgraphs: ['https://gateway.thegraph.com/api/6a217817dd87d33db10beed79b044a91/subgraphs/id/GvkbnEVhLD6KArXpEzLFtSKRmspBW29ApKFqR5FjuP2P', 'https://gateway.thegraph.com/api/8b164501e1862078eff5fb9dda136c6c/subgraphs/id/GvkbnEVhLD6KArXpEzLFtSKRmspBW29ApKFqR5FjuP2P', 'https://tornadocash-rpc.com/subgraphs/name/tornadocash/optimism-tornado-subgraph'],
       defaultRpcs: ['https://optimism.blockpi.network/v1/rpc/public', 'https://optimism-mainnet.chainnodes.org/3ae3d849-a613-4917-a56e-080f181aa4da', 'https://endpoints.omniatech.io/v1/op/mainnet/public', 'https://optimism-mainnet.public.blastapi.io', 'https://optimism.drpc.org']
+    },
+    netId11155111: {
+      tokens:
+      {
+        eth: 
+        {
+          instanceAddress: 
+          {
+            0.1: '0x8C4A04d872a6C1BE37964A21ba3a138525dFF50b',
+            1: '0x8cc930096B4Df705A007c4A039BDFA1320Ed2508',
+            10: '0x8D10d506D29Fc62ABb8A290B99F66dB27Fc43585',
+          },
+          deployedBlockNumber: 
+          {
+            0.1: 5594400,
+            1: 5594401,
+            10: 5594402,
+          },
+            miningEnabled: false,
+            symbol: 'ETH',
+            decimals: 18
+        } 
+      },
+      ensSubdomainKey: 'sepolia-tornado',
+      firstDeploymentTransaction: '0x7c7260a119bd0682b785da8860def277877ffaa50c2068ee78d6cb51f50bdc1f',
+      proxy: '0x1572AFE6949fdF51Cb3E0856216670ae9Ee160Ee',
+      multicall: '0x53c43764255c17bd724f74c4ef150724ac50a3ed',
+      subgraphs: ['https://gateway.thegraph.com/api/6a217817dd87d33db10beed79b044a91/subgraphs/id/8kJGz92AYUm72wfyUoze1as3E11ynDSTZM8emiRWrRPy',
+                  'https://gateway.thegraph.com/api/8b164501e1862078eff5fb9dda136c6c/subgraphs/id/8kJGz92AYUm72wfyUoze1as3E11ynDSTZM8emiRWrRPy',
+                  'https://tornadocash-rpc.com/subgraphs/name/tornadocash/sepolia-tornado-subgraph'
+      ],
+      defaultRpcs: ['https://ethereum-sepolia-rpc.publicnode.com', 
+                    'https://sepolia.chainnodes.org/61b7de01-6cc4-40dc-a6c2-b6e4a61bb042',
+                    'https://sepolia.drpc.org',
+                    'https://eth-sepolia.g.alchemy.com/v2/demo',
+                    'https://eth-sepolia.public.blastapi.io',
+                    'https://eth-sepolia.api.onfinality.io/public']
+      
+    },
+    netId61:
+    {
+      tokens: 
+      {
+        etc:
+        {
+          instanceAddress: 
+          {
+            1: '0x2f56d5aFC058B8734350B162EFEe75ee48f034e0',
+            10: '0x59fCB629A23e8eD0a60A0188771E221042260118',
+            100: '0x784B3a7a7981B959bd8d9D9e73c2013BE819Fbf2',
+          },
+          deployedBlockNumber: 
+          {
+            1: 22385618,
+            10: 22385618,
+            100: 22385618,
+          },
+          miningEnabled: false,
+          symbol: 'ETC',
+          decimals: 18
+        }
+      },
+      ensSubdomainKey: 'etc-tornado',
+      firstDeploymentTransaction: '0x4d9232046d3503138525bb3b921e131153d02b436f9f81426f52929e50ab359e',
+      proxy: '0xac97AB4fBd872ea762974CbBB0Ee72351afe16F3',
+      multicall: '0xA52EE88C0F24EF8b96C3989cAb42cfC6008041A8',
+      subgraphs: ['https://graph.torndao.com/subgraphs/name/tornadocash/etc-tornado-subgraph'],
+      defaultRpcs:  ['https://etc.etcdesktop.com',
+                     'https://etc.rivet.link',
+                     'https://etc.mytokenpocket.vip',
+                     'https://0xrpc.io/etc',
+                     'https://geth-at.etc-network.info',
+                     'https://besu-at.etc-network.info'],
+      
     }
   }
 };
