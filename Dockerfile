@@ -5,7 +5,7 @@ RUN apt update && apt install --yes --no-install-recommends wget git apt-transpo
 
 WORKDIR /home/root/tornado-cli
 
-ENV GIT_REPOSITORY=https://git.tornado.ws/tornadosto/tornado-cli.git
+ENV GIT_REPOSITORY=https://git.tornado.ws/tornadocash/tornado-cli
 ENV GIT_COMMIT_HASH=1ae2aec71d3cfb28911ce4c60bdd35650e93e5e4
 
 RUN git init && \
