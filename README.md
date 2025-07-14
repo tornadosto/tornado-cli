@@ -53,7 +53,12 @@ Also, you can use VPN for CLI without Tor or even combine it.
 
 All code logic located in `cli.js`, other files is just testing scripts or static files. You can check or change any part of the code and at next `node cli.js` run changes will apply.
 
-Any user can check that the precompiled `tornado-cli.exe` matches the source code. To build `tornado-cli.exe`, [pkg](https://www.npmjs.com/package/pkg) package is used, which allows creating deterministic and reproducible executable from source. Creating script is located at `./scripts/createDeterministicExecutable.js`, and you can rebuild executable with command `npm run createExe`, or you can verify that sha1 hash of existing executable matches new executable, verification script located at `./scripts/verifyExecutable` and you can call it with command `npm run verifyExe` and compare hashes.
+Any user can check that the precompiled `tornado-cli.exe` matches the source code. To verify **tornado-cli.exe**:
+
+1. Build docker image from latest commit: `docker build -t tornado-cli .`
+2. Create container`docker create --name tornado-cli tornado-cli:latest`
+3. Copy executable from container `docker cp tornado-cli:/home/root/tornado-cli/tornado-cli.exe tornado-cli-verify.exe`
+4. Compare hashes of original tornado-cli.exe and freshly generated executable with two commands: on Windows use `CertUtil -hashfile tornado-cli.exe SHA256` and `CertUtil -hashfile tornado-cli-verify.exe SHA256`, on Linux - `sha256sum tornado-cli.exe` and `sha256sum tornado-cli-verify.exe`. Hashes should be identical.
 
 ### Commands and usage
 
@@ -163,21 +168,3 @@ View transaction on block explorer https://goerli.etherscan.io/tx/0x6ded443caed8
 Tornado contract balance is xxx.x ETH
 Sender account balance is x.xxxxxxx ETH
 ```
-
-#### To verify:
-
-```bash
-$ docker build -t tornado-cli:latest .
-```
-wait for docker to build
-
-```bash
-$ docker run --rm -v %cd%/output:/output tornado-cli:latest /copy_out.sh
-```
-copy exe to current folder in windows
-
-```bash
-CertUtil -hashfile output/tornado-cli.exe SHA256
-CertUtil -hashfile tornado-cli.exe SHA256
-```
-compare with the exe in git

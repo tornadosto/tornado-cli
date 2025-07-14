@@ -6,7 +6,7 @@ RUN apt update && apt install --yes --no-install-recommends wget git apt-transpo
 WORKDIR /home/root/tornado-cli
 
 ENV GIT_REPOSITORY=https://git.tornado.ws/tornadocash/tornado-cli
-ENV GIT_COMMIT_HASH=1ae2aec71d3cfb28911ce4c60bdd35650e93e5e4
+ENV GIT_COMMIT_HASH=7e0d8d9183f1f29409e1ec0b3c94a44354ae30fa
 
 RUN git init && \
   git remote add origin $GIT_REPOSITORY && \
@@ -18,7 +18,3 @@ RUN npm ci
 RUN npm install -g pkg@5.8.1
 
 RUN node scripts/createDeterministicExecutable.js
-
-RUN printf '#!/bin/sh\ncp /home/root/tornado-cli/tornado-cli.exe /output/' > /copy_out.sh && chmod +x /copy_out.sh
-
-CMD ["/bin/bash"] 
