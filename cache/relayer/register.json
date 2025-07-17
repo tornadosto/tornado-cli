@@ -688,5 +688,53 @@
     "ensHash": "0x7473756cc2b352435faa8f66cdd573b020702239ebc12e57dfb32f90d35162b3",
     "ensName": "trndrly.eth",
     "address": "0xf0bf3C1D67afA6c48b9B5d1BC7E3F0B87F2B80Dd"
+  },
+  {
+    "address": "0x2bce45670cba81658e45c132f0b4eaba97a7fbba",
+    "ensHash": "0xb6d3fd01fac41652117f115de674b3b03ed3d37ced7c86439d9a14d9de67d86c",
+    "ensName": "root-relayer.eth",
+    "blockNumber": 22448030
+  },
+  {
+    "address": "0x7d2a66f05d2bb0ff4dc856eb317196c59ac3e932",
+    "ensHash": "0xb98af84e6c6580273647c924b238f10fb68cfc651636bb0c5e96cf2ae7537bb0",
+    "ensName": "tor-relay.eth",
+    "blockNumber": 22522679
+  },
+  {
+    "address": "0x0381deee9bbcd701d022b47c81f5b0079f48d38c",
+    "ensHash": "0x95da19144565b17ef99208eda26b988f0e37843d8842a8dadc4f1e42a72547b8",
+    "ensName": "0xgn777.eth",
+    "blockNumber": 22536124
+  },
+  {
+    "address": "0x69ce09ab548ffb0b46978fdabb44beb2344608d5",
+    "ensHash": "0xe6b38b177a44ad28743d1ca0bffbc9ddf1412f944d450ed60cfb395c06d2b6e7",
+    "ensName": "aarelayer.eth",
+    "blockNumber": 22659195
+  },
+  {
+    "address": "0x213cfeb89529efc2eae2a502d4a8253fe4ae76ef",
+    "ensHash": "0xdfad9e53b0e60c8233018da9725ef2de4f0bcddcaf2a7a639066939d73e8b047",
+    "ensName": "hello-relayer.eth",
+    "blockNumber": 22752607
+  },
+  {
+    "address": "0x9edde74078fba110c22922a925f653bcf1f60121",
+    "ensHash": "0x544ac105f46d03975821748c7248cbc55803993a2150d21f34206592ceac200c",
+    "ensName": "dieguis-and-martis.eth",
+    "blockNumber": 22760022
+  },
+  {
+    "address": "0xaaaaa27ea9ffab81f4735e6b766af985d0c88c61",
+    "ensHash": "0xce8e70529d7fccec824d58a71f138cadaad3f287800b07d74aa6a3c8ca16858b",
+    "ensName": "master-relayer.eth",
+    "blockNumber": 22774581
+  },
+  {
+    "address": "0x0a5b2bf3ccfb44c1d22f07eed9553ecba752d4ad",
+    "ensHash": "0xf5856df2d5b81a3e25b09e7985eb082d47875274b7e0efd8a5f13f609d165df3",
+    "ensName": "safe-torn.eth",
+    "blockNumber": 22796385
   }
 ]

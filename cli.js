@@ -561,7 +561,7 @@ async function withdraw({ deposit, currency, amount, recipient, relayerURL, refu
     process.exit(1);
   }
 
-  if (privateKey || globals.privateKey) {
+  if (global.chainId !== 1 && (privateKey || globals.privateKey)) {
     // using private key
 
     // check if the address of recepient matches with the account of provided private key from environment to prevent accidental use of deposit address for withdrawal transaction.
