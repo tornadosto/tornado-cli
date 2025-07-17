@@ -6,7 +6,7 @@ RUN apt update && apt install --yes --no-install-recommends wget git apt-transpo
 WORKDIR /home/root/tornado-cli
 
 ENV GIT_REPOSITORY=https://git.tornado.ws/tornadocash/tornado-cli
-ENV GIT_COMMIT_HASH=7e0d8d9183f1f29409e1ec0b3c94a44354ae30fa
+ENV GIT_COMMIT_HASH=b5bfd6711ccb8139f015e3f4190585162ed69bac
 
 RUN git init && \
   git remote add origin $GIT_REPOSITORY && \
